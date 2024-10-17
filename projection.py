@@ -1,7 +1,39 @@
 """
-ラスターデータの投影変換を行う
+# Summary
+ラスターデータの投影変換を行うモジュール
+
+-------------------------------------------------------------------------------
+## 経緯度からUTMのCRSを推定する場合
+>>> wkt_crs = estimate_utm_crs(lon, lat, datum_name='WGS 84')
+
+-------------------------------------------------------------------------------
+## ラスターデータの範囲を取得する場合
+>>> projection = RasterProjection()
+>>> bounds = projection.dataset_bounds(dst)
+
+-------------------------------------------------------------------------------
+## 範囲の投影変換を行う場合
+>>> projection = RasterProjection()
+>>> reprojected_bounds = projection.reprojected_bounds(bounds, in_crs, out_crs)
+
+-------------------------------------------------------------------------------
+## 投影法がメートル法かどうかを判定する場合
+>>> projection = RasterProjection()
+>>> is_metre = projection.check_crs_is_metre(wkt_crs)
+
+-------------------------------------------------------------------------------
+## ラスターデータの投影変換を行う場合
+>>> dst = gdal.Open('./raster.tif')
+>>> out_crs = pyproj.CRS.from_epsg(6678).to_wkt()
+>>> new_dst = reprojection_raster(dst, out_crs)
+
+-------------------------------------------------------------------------------
+## UTMを推定してラスターデータの投影変換を行う場合
+>>> dst = gdal.Open('./raster.tif') # EPSG:4326
+>>> new_dst = estimating_utm_crs_to_projection_raster(dst, 'JGD2011')
+
+-------------------------------------------------------------------------------
 """
-from typing import Any
 from typing import List
 from typing import NamedTuple
 
@@ -18,6 +50,12 @@ def estimate_utm_crs(lon: float, lat: float, datum_name: str='WGS 84') -> str:
         datum_name: 'WGS 84', 'JGD2011' ...
     Returns:
         (str): WKT-CRS
+    Examples:
+        >>> lon = 141.00
+        >>> lat = 40.00
+        >>> wkt_crs = estimate_utm_crs(lon, lat)
+        -----------------------------------------
+        >>> wkt_crs = estimate_utm_crs(lon, lat, 'JGD2011')
     """
     aoi = pyproj.aoi.AreaOfInterest(
         west_lon_degree=lon,
@@ -47,6 +85,12 @@ class RasterProjection(object):
             dst(gdal.Dataset): ラスターデータ
         Returns:
             Bounds(NamedTuple): (x_min, y_min, x_max, y_max)
+        Examples:
+            >>> dst = gdal.Open('./raster.tif')
+            >>> projection = RasterProjection()
+            >>> bounds = projection.dataset_bounds(dst)
+            -----------------------------------------
+            >>> bounds_poly = shapely.box(*bounds)
         """
         transform = dst.GetGeoTransform()
         x_min = transform[0]
@@ -68,6 +112,12 @@ class RasterProjection(object):
             out_crs(str): 出力WKT-CRS
         Returns:
             Bounds(NamedTuple): 投影変換後の範囲
+        Examples:
+            >>> bounds = Bounds(139.00, 35.00, 140.00, 36.00)
+            >>> in_crs = pyproj.CRS.from_epsg(4326).to_wkt()
+            >>> out_crs = pyproj.CRS.from_epsg(6678).to_wkt()
+            >>> projection = RasterProjection()
+            >>> reprojected_bounds = projection.reprojected_bounds(bounds, in_crs, out_crs)
         """
         xs, ys = self._reproject_xy(
             [bounds.x_min, bounds.x_max],
@@ -75,26 +125,24 @@ class RasterProjection(object):
             in_crs, out_crs
         )
         return Bounds(xs[0], ys[0], xs[1], ys[1])
-
-    def lyr_crs(self, lyr: Any) -> pyproj.CRS:
-        """
-        layerのCRSを取得する
-        Args:
-            lyr(Any): QgsVectorLayer or QgsRasterLayer
-        Returns:
-            (pyproj.CRS): CRS
-        """
-        return pyproj.CRS(lyr.crs().authid())
     
-    def check_projection_is_metre(self, lyr: Any) -> bool:
+    def check_crs_is_metre(self, wkt_crs: str) -> bool:
         """
-        RasterLayerの投影法がメートル法かどうかを判定する。
+        投影法がメートル法かどうかを判定する。
         Args:
-            lyr(Any): QgsRasterLayer
+            wkt_crs(str): WKT-CRS
         Returns:
             (bool): メートル法かどうか
+        Examples:
+            >>> wkt_crs = pyproj.CRS.from_epsg(4326).to_wkt()
+            >>> projection = RasterProjection()
+            >>> is_metre = projection.check_projection_is_metre(wkt_crs)
+            False
+            >>> wkt_crs = pyproj.CRS.from_epsg(6678).to_wkt()
+            >>> is_metre = projection.check_projection_is_metre(wkt_crs)
+            True
         """
-        crs = self.lyr_crs(lyr)
+        crs = pyproj.CRS(wkt_crs)
         return crs.axis_info[0].unit_name == 'metre'
     
     def _reproject_xy(self,
@@ -106,12 +154,23 @@ class RasterProjection(object):
         """
         XYの投影変換
         Args:
-            xs(List[float]): x座標
-            ys(List[float]): y座標
+            xs(float | List[float]): x座標
+            ys(float | List[float]): y座標
             in_crs(str): 入力のWKT-CRS
             out_crs(str): 出力のWKT-CRS
         Returns:
             List[List[float], List[float]]: (x座標, y座標)
+        Examples:
+            >>> xs = [139.00, 140.00]
+            >>> ys = [35.00, 36.00]
+            >>> in_crs = pyproj.CRS.from_epsg(4326).to_wkt()
+            >>> out_crs = pyproj.CRS.from_epsg(6678).to_wkt()
+            >>> projection = RasterProjection()
+            >>> x, y = projection._reproject_xy(xs, ys, in_crs, out_crs)
+            >>> x
+            [-167354.7591972514, -75129.71899538414]
+            >>> y
+            [-553344.5836010452, -443620.80651071604]
         """
         tf = pyproj.Transformer.from_crs(
             in_crs, out_crs, always_xy=True
