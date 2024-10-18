@@ -15,7 +15,7 @@ class RasterCrop(object):
             format=fmt,
             cutlineWKT=wkt_poly,
             cropToCutline=True,
-            dstNodata=dst.GetNoDataValue(),
+            dstNodata=dst.GetRasterBand(1).GetNoDataValue(),
             srcNodata=nodata
         )
 
