@@ -192,7 +192,7 @@ class RasterProjection(object):
     def metre_to_degree(self, metre: float, in_crs: str, x: float, y: float) -> float:
         line = shapely.LineString([[x, y], [x + metre, y]]).wkt
         out_crs = pyproj.CRS(4326).to_wkt()
-        new_line = self.transform_geometry(line, in_crs, out_crs)
+        new_line = self.reprojection_geometry(line, in_crs, out_crs)
         return shapely.from_wkt(new_line).length
     
     def reprojection_raster(self, dst: gdal.Dataset, out_crs: str) -> gdal.Dataset:
