@@ -176,6 +176,17 @@ class RasterProjection(object):
             in_crs, out_crs, always_xy=True
         )
         return tf.transform(xs, ys)
+
+    def reprojection_geometry(self, wkt_geometry: str, in_wkt_crs: str, out_wkt_crs: str) -> str:
+        geom = shapely.from_wkt(wkt_geometry)
+        project = (
+            pyproj
+            .Transformer
+            .from_crs(in_wkt_crs, out_wkt_crs, always_xy=True)
+            .transform
+        )
+        transformed_geom = shapely.ops.transform(project, geom )
+        return transformed_geom.wkt
     
     def reprojection_raster(self, dst: gdal.Dataset, out_crs: str) -> gdal.Dataset:
         """
