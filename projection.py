@@ -39,6 +39,7 @@ from typing import NamedTuple
 
 from osgeo import gdal
 import pyproj
+import shapely
 
 
 def estimate_utm_crs(lon: float, lat: float, datum_name: str='WGS 84') -> str:
