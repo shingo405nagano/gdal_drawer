@@ -1,1 +1,0 @@
-# aryとDetasetを受け取り、aryをDatasetに変換する関数
