@@ -408,6 +408,31 @@ class GdalUtils(object):
         else:
             return data, geoms
 
+    def interpolation_dst(
+        dst: gdal.Dataset, 
+        max_search_distance: int, 
+        smoothing: int=10
+    ) -> gdal.Dataset:
+        # 入力されるデータセットの作成
+        driver = gdal.GetDriverByName('MEM')
+        driver.Register()
+        trg_dst = driver.CreateCopy('', dst)
+        # マスクに使用するデータセット
+        driver = gdal.GetDriverByName('MEM')
+        driver.Register()
+        mask_dst = driver.CreateCopy('', dst)
+        mask_band = mask_dst.GetRasterBand(1)
+        mask_ary = mask_band.ReadAsArray() != mask_band.GetNoDataValue()
+        mask_band.WriteArray(mask_ary)
+        # NoDataの穴埋め
+        trg_band = trg_dst.GetRasterBand(1)
+        gdal.FillNodata(
+            trg_band, 
+            mask_band, 
+            maxSearchDist=max_search_distance, 
+            smoothingIterations=smoothing
+        )
+        return trg_dst
 
 gutils = GdalUtils()
 
