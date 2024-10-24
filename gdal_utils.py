@@ -211,10 +211,16 @@ class GdalUtils(object):
         else:
             # y方向のベクトルを指定する
             line = shapely.LineString([[lon, lat], [lon, lat + degree]]).wkt
-        line = shapely.LineString([[lon, lat], [lon + degree, lat]]).wkt
         # UTMのCRSを推定し投影変換を行う
         in_wkt_crs = pyproj.CRS.from_epsg(4326).to_wkt()
         out_wkt_crs = self.estimate_utm_crs(lon, lat)
         new_line = self.reprojection_geometry(line, in_wkt_crs, out_wkt_crs)
         metre = shapely.from_wkt(new_line).length
         return round(metre, digit)
+"""
+band_numbers = 1. None, 2. int, 3. List[int]
+1. None: すべてのバンドを読み込む
+
+2. int: 指定したバンドを読み込む
+3. List[int]: 指定したバンドを読み込む
+"""

@@ -1,8 +1,10 @@
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 from typing import Any
 from typing import Dict
+from typing import Generator
 from typing import List
 from typing import NamedTuple
 from typing import Tuple
@@ -53,32 +55,17 @@ class CenterCoordinates:
 ################################################################################
 # --------------------------------- Functions ----------------------------------
 ################################################################################
-def nodata_to(ary: np.ndarray, nodata: Any, fill: Any=np.nan) -> np.ndarray:
-    """
-    配列の欠損値を指定した値に変換する
-    Args:
-        ary(np.ndarray): 配列
-        nodata(Any): 欠損値
-        fill(Any): 欠損値を変換する値
-    Returns:
-        np.ndarray: 欠損値を変換した配列
-    """
-    ary = np.where(ary == nodata, fill, ary)
-    ary = np.where(np.isnan(ary), fill, ary)
-    ary = np.where(np.isinf(ary), fill, ary)
-    return ary
-
 
 ##############################################################################
 # ------------------------------ Main class ----------------------------------
 ################################################################################
 class CustomGdalDataset:
     def __init__(self, dataset):
-        self.dataset = dataset
         if not isinstance(dataset, gdal.Dataset):
-            raise ValueError('The dataset must be an instance of `gdal.Dataset`.')
-        if self.GetProjection() == '':
-            raise ValueError('The dataset must have crs projection.')
+            custom_gdal_exception.not_gdal_dataset_err()
+        if dataset.GetProjection() == '':
+            custom_gdal_exception.not_have_crs_err()
+        self.dataset = self._copy_dataset(dataset)
 
     def __getattr__(self, module_name):
         return getattr(self.dataset, module_name)
@@ -106,6 +93,54 @@ class CustomGdalDataset:
             return func(self, *args, **kwargs)
         return wrapper
 
+    @staticmethod
+    def __is_iterable_of_ints(func):
+        def wrapper(self, obj, *args, **kwargs):
+            if isinstance(obj, Iterable):
+                if all(isinstance(item, int) for item in obj):
+                    return func(self, obj, *args, **kwargs)
+            custom_gdal_exception.get_band_number_err()
+        return wrapper
+
+    @staticmethod
+    def __pyproj_to_wkt_crs(func):
+        def wrapper(self, obj=None, *args, **kwargs):
+            if obj is None:
+                return func(self, obj, *args, **kwargs)
+            elif isinstance(obj, pyproj.CRS):
+                return func(self, obj.to_wkt(), *args, **kwargs)
+            return func(self, obj, *args, **kwargs)
+        return wrapper
+
+    @staticmethod
+    def __wkt_geometry_check(func: Callable) -> str:
+    # ジオメトリがWKT形式であるかチェックする。shapely.geometryだった場合はWKT形式に変換する
+        def wrapper(self, *args, **kwargs):
+            args_ = False
+            if 'wkt_poly' not in kwargs.keys():
+                poly = args[0]
+                args_ = True
+            else:
+                poly = kwargs.get('wkt_poly')
+            if isinstance(poly, str):
+                try:
+                    shapely.from_wkt(poly)
+                except shapely.errors.WKTReadingError:
+                    custom_gdal_exception.load_wkt_geometry_err()
+                else:
+                    return func(self, *args, **kwargs)
+            elif isinstance(poly, shapely.geometry.base.BaseGeometry):
+                if args_:
+                    lst = list(args)
+                    lst[2] = poly.wkt
+                    args = tuple(lst)
+                else:
+                    kwargs['wkt_poly'] = poly.wkt
+                return func(self, *args, **kwargs)
+            else:
+                custom_gdal_exception.load_wkt_geometry_err()
+        return wrapper
+
     @property
     def x_resolution(self):
         """
@@ -124,16 +159,112 @@ class CustomGdalDataset:
         """
         return self.GetGeoTransform()[-1]
 
-    @property
-    def array(self) -> np.ndarray:
+    def array(self, band_numbers: int | Iterable[int]=None) -> np.ndarray:
         """
-        Nodataを全てnp.nanに変換した配列を取得する
+        gdal.Datasetから配列を取得する。この関数はFloat型のNoDataをnp.nanに変換し、バンドのNoDataも書き換える。
+        Args:
+            band_numbers(int | Iterable[int]): バンド番号。指定しない場合は全バンドを取得する。
         Returns:
-            (np.ndarray): 
+            (np.ndarray): Float型はNoDataをnp.nanに変換した配列を返す。この際、バンドのNoDataも書き換える。
+        Examples:
+            >>> ary = dst.array()
+            >>> ary = dst.array(1)
+            >>> ary = dst.array([1, 2, 3])
+            >>> ary = dst.array([3, 2, 1])
         """
-        band = self.GetRasterBand(1)
-        return nodata_to(self.ReadAsArray(), band.GetNoDataValue(), np.nan)
+        if band_numbers is None:
+            # バンド番号が指定されている場合
+            return self._get_all_ary()
+        elif isinstance(band_numbers, int):
+            return self._get_selected_ary(band_numbers)
+        elif isinstance(band_numbers, Iterable):
+            return self._get_selected_arys(band_numbers)
+        else:
+            custom_gdal_exception.get_band_err()
+        
+    def _get_all_ary(self) -> np.ndarray:
+        """
+        全バンドの配列を取得し、Float型ならばNoDataをnp.nanに変換する。
+        Returns:
+            (np.ndarray): Float型はNoDataをnp.nanに変換した配列を返す。この際、バンドのNoDataも書き換える。
+        """
+        arys = []
+        for band in self._band_generator:
+            data_type = gdal.GetDataTypeName(band.DataType)
+            if data_type in ['Float32', 'Float64']:
+                arys.append(self._get_float_ary(band))
+            else:
+                arys.append(band.ReadAsArray())
+        ary = np.array(arys)
+        if ary.shape[0] == 1:
+            return ary[0]
+        return ary
+    
+    def _get_selected_ary(self, band_nums: int) -> np.ndarray:
+        """
+        指定したバンドの配列を取得する
+        Args:
+            band_nums(int): バンド番号
+        Returns:
+            (np.ndarray): Float型はNoDataをnp.nanに変換した配列を返す。この際、バンドのNoDataも書き換える。
+        """
+        band = self.GetRasterBand(band_nums)
+        data_type = gdal.GetDataTypeName(band.DataType)
+        if data_type in ['Float32', 'Float64']:
+            return self._get_float_ary(band)
+        return band.ReadAsArray()
 
+    @__is_iterable_of_ints
+    def _get_selected_arys(self, band_nums: List[int]) -> np.ndarray:
+        """
+        Listで指定したバンドの配列を取得する
+        Args:
+            band_nums(List[int]): バンド番号のリスト
+        Returns:
+            (np.ndarray): Float型はNoDataをnp.nanに変換した配列を返す。この際、バンドのNoDataも書き換える。
+        """
+        arys = []
+        for band_num in band_nums:
+            band = self.GetRasterBand(band_num)
+            data_type = gdal.GetDataTypeName(band.DataType)
+            if data_type in ['Float32', 'Float64']:
+                arys.append(self._get_float_ary(band))
+            else:
+                arys.append(band.ReadAsArray())
+        ary = np.array(arys)
+        if ary.shape[0] == 1:
+            return ary[0]
+        return ary
+
+    @property
+    def _band_generator(self) -> Generator:
+        """
+        gdal.Bandのジェネレータを取得する
+        Returns:
+            Generator: gdal.Band
+        Examples:
+            >>> for band in dst._band_generator:
+            >>>     ary = band.ReadAsArray()
+            >>>     nodata = band.GetNoDataValue()
+        """
+        for i in range(1, self.dataset.RasterCount + 1):
+            yield self.dataset.GetRasterBand(i)
+    
+    def _get_float_ary(self, band: gdal.Band) -> np.array:
+        """
+        Nodataを全てnp.nanに変換した配列を取得し、BandのNodataを書き換える。
+        Args:
+            band(gdal.Band):
+        Returns:
+            (np.ndarray): NoDataをnp.nanに変換した配列
+        """
+        ary = band.ReadAsArray()
+        ary = np.where(ary == band.GetNoDataValue(), np.nan, ary)
+        ary = np.where(np.isnan(ary), np.nan, ary)
+        ary = np.where(np.isinf(ary), np.nan, ary)
+        band.SetNoDataValue(np.nan)
+        return ary
+        
     #######################################################################
     # -------------------- Methods for create dataset. --------------------
     def copy_dataset(self) -> gdal.Dataset:
@@ -145,8 +276,22 @@ class CustomGdalDataset:
             >>> new_dst: gdal.Dataset = dst.copy_dataset()
         """
         driver = gdal.GetDriverByName('MEM')
-        new_dst = driver.CreateCopy('', dst)
+        new_dst = driver.CreateCopy('', self.dataset)
         return CustomGdalDataset(new_dst)
+    
+    def _copy_dataset(self, dst: gdal.Dataset) -> gdal.Dataset:
+        """
+        `gdal.Dataset`のコピーを作成する。
+        Args:
+            dst(gdal.Dataset): コピー先のDataset
+        Returns:
+            (gdal.Dataset):
+        Examples:
+            >>> new_dst: gdal.Dataset = dst._copy_dataset()
+        """
+        driver = gdal.GetDriverByName('MEM')
+        new_dst = driver.CreateCopy('', dst)
+        return new_dst
 
     def save_dst(self, file_path: Path, fmt: str='GTiff') -> None:
         """
@@ -301,13 +446,13 @@ class CustomGdalDataset:
         write_dst = self.copy_dataset()
         # マスクに使用するデータセット
         mask_dst = self.copy_dataset()
-        mask_ary = mask_dst.array
+        mask_ary = mask_dst.array()
         mask_ary = np.where(np.isnan(mask_ary), False, True)
         mask_band = mask_dst.GetRasterBand(1)
         mask_band.WriteArray(mask_ary)
-        trg_band = write_dst.GetRasterBand(1)
+        write_band = write_dst.GetRasterBand(1)
         gdal.FillNodata(
-            trg_band, 
+            write_band, 
             mask_band, 
             maxSearchDist=max_search_distance, 
             smoothingIterations=smoothing
@@ -332,15 +477,12 @@ class CustomGdalDataset:
         # マスクに使用するデータセット
         mask_dst = self.copy_dataset()
         # 穴埋め箇所をFalse, それ以外をTrueに変換
-        mask_ary = mask_dst.array[0]
+        mask_ary = mask_dst.array()[0]
         mask_ary = np.where(np.isnan(mask_ary), False, True)
-        for i in range(self.RasterCount):
-            # 各バンドの穴埋め
-            mask_band = mask_dst.GetRasterBand(i + 1)
+        for write_band, mask_band in zip(write_dst._band_generator, mask_dst._band_generator):
             mask_band.WriteArray(mask_ary)
-            trg_band = write_dst.GetRasterBand(i + 1)
             gdal.FillNodata(
-                trg_band, 
+                write_band, 
                 mask_band, 
                 maxSearchDist=max_search_distance, 
                 smoothingIterations=smoothing
@@ -366,6 +508,7 @@ class CustomGdalDataset:
         y_min = y_max + rows * self.y_resolution
         return Bounds(x_min, y_min, x_max, y_max)
     
+    @__pyproj_to_wkt_crs
     @__check_crs
     def reprojected_bounds(self, out_wkt_crs: str) -> Bounds:
         """
@@ -388,6 +531,7 @@ class CustomGdalDataset:
         )
         return Bounds(xs[0], ys[0], xs[1], ys[1])
     
+    @__pyproj_to_wkt_crs
     @__check_crs
     def center(self, out_wkt_crs: str=None) -> XY:
         """
@@ -629,6 +773,7 @@ class CustomGdalDataset:
 
     ############################################################################
     # ----------------- Methods for projection transform. -----------------
+    @__pyproj_to_wkt_crs
     @__check_crs
     def reprojected_dataset(self, out_wkt_crs: str) -> gdal.Dataset:
         """
@@ -794,6 +939,115 @@ class CustomGdalDataset:
             x_cells, y_cells, resample_algorithm)
         return CustomGdalDataset(gdal.Warp('', self.dataset, options=ops))
 
+    ############################################################################
+    # ----------------- Methods for clipping dataset. -----------------
+    @__wkt_geometry_check
+    def _option_template_with_wkt_poly_spec(self,
+        wkt_poly: str,
+        fmt: str='MEM',
+        nodata: Any=np.nan,
+        **kwargs
+    ) -> gdal.Dataset:
+        """
+        gdal.WarpでRasterを切り抜く為のオプションテンプレートを作成する
+        Args:
+            dst (gdal.Dataset): 切り抜くRaster
+            wkt_poly (str): 切り抜く範囲のWKT形式のポリゴン
+            fmt (str, optional): 出力形式. Defaults to 'MEM'.
+            nodata (Any, optional): 出力RasterのNoData値. Defaults to np.nan.
+        Returns:
+            gdal.WarpOptions: gdal.WarpでRasterを切り抜く為のオプション
+        """
+        poly_crs = kwargs.get('poly_crs', self.GetProjection())
+        if poly_crs != self.GetProjection() and not isinstance(poly_crs, str):
+            poly_crs = poly_crs.to_wkt()
+        return gdal.WarpOptions(
+            format=fmt,
+            cutlineWKT=wkt_poly,
+            cropToCutline=True,
+            cutlineSRS=poly_crs,
+            srcSRS=self.GetProjection(),
+            dstNodata=nodata,
+            srcNodata=dst.GetRasterBand(1).GetNoDataValue()
+        )
+    
+    def clip_by_wkt_poly(self, 
+        wkt_poly: str | shapely.Polygon, 
+        nodata: Any=np.nan,
+        **kwargs
+    ) -> gdal.Dataset:
+        """
+        ## Summary
+        ポリゴンでラスターデータをクリップする。このメソッドは、ポリゴンの投影法が異なる場合にも使用できる。
+        Args:
+            wkt_poly(str): WKT形式のポリゴン
+            nodata(Any, optional): NoData. Defaults to np.nan
+            kwargs:
+                poly_crs(str): ポリゴンの投影法. Defaults to None. これを指定すれば Raster と異なる投影法のポリゴンを使用できる。
+        Returns:
+            gdal.Dataset: クリップ後のラスターデータ
+        Examples:
+            >>> wkt_poly = 'POLYGON ((x1 y1, x2 y2, x3 y3, x4 y4, x1 y1))'
+            >>> new_dst: gdal.Dataset = dst.clip_by_wkt_poly(wkt_poly)
+        """
+        # ポリゴンの投影法が異なり、かつ指定されている場合は、ポリゴンを投影変換する
+        options = self._option_template_with_wkt_poly_spec(
+            wkt_poly, 
+            nodata=nodata, 
+            poly_crs=kwargs.get('poly_crs', self.GetProjection())
+        )
+        return CustomGdalDataset(gdal.Warp('', self.dataset, options=options))
+    
+    def clip_by_bounds(self, 
+        wkt_poly: str | shapely.Polygon,
+        nodata: Any=np.nan,
+        **kwargs
+    ) -> gdal.Dataset:
+        """
+        ## Summary
+        Polygonのバウンディングボックスでラスターデータをクリップする。このメソッドは、ポリゴンの投影法が異なる場合にも使用できる。
+        Args:
+            wkt_poly(str): WKT形式のポリゴン
+            nodata(Any, optional): NoData. Defaults to np.nan
+            kwargs:
+                poly_crs(str): ポリゴンの投影法. Defaults to None. これを指定すれば Raster と異なる投影法のポリゴンを使用できる。
+        Returns:
+            gdal.Dataset: クリップ後のラスターデータ
+        """
+        if isinstance(wkt_poly, str):
+            wkt_poly = shapely.from_wkt(wkt_poly).envelope.wkt
+        elif isinstance(wkt_poly, shapely.geometry.base.BaseGeometry):
+            wkt_poly = wkt_poly.envelope.wkt
+        else:
+            custom_gdal_exception.load_wkt_geometry_err()
+        poly_crs = kwargs.get('poly_crs', self.GetProjection())
+        return self.clip_by_wkt_poly(wkt_poly, nodata, poly_crs=poly_crs)
+
+    def clip_by_fit_bounds(self, 
+        wkt_poly: str | shapely.Polygon, 
+        nodata: Any=np.nan, 
+        **kwargs
+    ) -> gdal.Dataset:
+        """
+        ## Summary
+        ポリゴンの最小外接矩形でラスターデータをクリップする。このメソッドは、ポリゴンの投影法が異なる場合にも使用できる。
+        Args:
+            wkt_poly(str): WKT形式のポリゴン
+            nodata(Any, optional): NoData. Defaults to np.nan
+            kwargs:
+                poly_crs(str): ポリゴンの投影法. Defaults to None. これを指定すれば Raster と異なる投影法のポリゴンを使用できる。
+        Returns:
+            gdal.Dataset: クリップ後のラスターデータ
+        """
+        if isinstance(wkt_poly, str):
+            wkt_poly = shapely.from_wkt(wkt_poly).minimum_rotated_rectangle.wkt
+        elif isinstance(wkt_poly, shapely.geometry.base.BaseGeometry):
+            wkt_poly = wkt_poly.minimum_rotated_rectangle.wkt
+        else:
+            custom_gdal_exception.load_wkt_geometry_err()
+        poly_crs = kwargs.get('poly_crs', self.GetProjection())
+        return self.clip_by_wkt_poly(wkt_poly, nodata, poly_crs=poly_crs)
+
     #############################################################################
     # ----------------- Methods for obtaining cells statistics. -----------------
     def plot_raster(self, 
@@ -842,13 +1096,3 @@ class CustomGdalDataset:
             shrink = kwargs.get('shrink', 0.8)
             fig.colorbar(cb, shrink=shrink)
 
-
-from matplotlib import pyplot as plt
-# 使用例
-fp = r"D:\Repositories\ProcessingRaster\datasets\test\DTM__R10__EPSG6672.tif"
-# fp = r"D:\Repositories\ProcessingRaster\datasets\test\DTM__R10__InNan.tif"
-dst = gdal.Open(fp)
-dataset = CustomGdalDataset(dst)
-new_dataset = dataset.resample_with_resol_spec(5, 5)
-
-new_dataset = dataset = dst = None
