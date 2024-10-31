@@ -10,8 +10,11 @@ from typing import NamedTuple
 from typing import Tuple
 
 import geopandas as gpd
+from matplotlib import pyplot as plt
 import numpy as np
 from osgeo import gdal
+from osgeo import ogr
+from osgeo import osr
 import pandas as pd
 import pyproj
 import shapely
@@ -818,7 +821,7 @@ class CustomGdalDataset:
 
     ############################################################################
     # ----------------- Methods for resampling dataset. -----------------
-    def _option_template_with_resol_spec(self,
+    def _resample_option_template_with_resol_spec(self,
         x_resolution: float,
         y_resolution: float,
         resample_algorithm: int=gdal.GRA_CubicSpline
@@ -841,7 +844,7 @@ class CustomGdalDataset:
             outputBounds=self.bounds()
         )
 
-    def _option_temppate_with_cells_spec(self,
+    def _resample_option_temppate_with_cells_spec(self,
         x_cells: int,
         y_cells: int,
         resample_algorithm: int=gdal.GRA_CubicSpline
@@ -911,7 +914,7 @@ class CustomGdalDataset:
                 y_resolution, center.x, center.y, 
                 wkt_crs, x_direction=False
             )
-        ops = self._option_template_with_resol_spec(
+        ops = self._resample_option_template_with_resol_spec(
             x_resolution, y_resolution, resample_algorithm)
         return CustomGdalDataset(gdal.Warp('', self.dataset, options=ops))
 
@@ -935,14 +938,14 @@ class CustomGdalDataset:
         Examples:
             >>> new_dst: gdal.Dataset = dst.resample_with_cells(100, 100)
         """
-        ops = self._option_temppate_with_cells_spec(
+        ops = self._resample_option_temppate_with_cells_spec(
             x_cells, y_cells, resample_algorithm)
         return CustomGdalDataset(gdal.Warp('', self.dataset, options=ops))
 
     ############################################################################
     # ----------------- Methods for clipping dataset. -----------------
     @__wkt_geometry_check
-    def _option_template_with_wkt_poly_spec(self,
+    def _clip_option_template_with_wkt_poly_spec(self,
         wkt_poly: str,
         fmt: str='MEM',
         nodata: Any=np.nan,
@@ -991,7 +994,7 @@ class CustomGdalDataset:
             >>> new_dst: gdal.Dataset = dst.clip_by_wkt_poly(wkt_poly)
         """
         # ポリゴンの投影法が異なり、かつ指定されている場合は、ポリゴンを投影変換する
-        options = self._option_template_with_wkt_poly_spec(
+        options = self._clip_option_template_with_wkt_poly_spec(
             wkt_poly, 
             nodata=nodata, 
             poly_crs=kwargs.get('poly_crs', self.GetProjection())
@@ -1048,6 +1051,95 @@ class CustomGdalDataset:
         poly_crs = kwargs.get('poly_crs', self.GetProjection())
         return self.clip_by_wkt_poly(wkt_poly, nodata, poly_crs=poly_crs)
 
+    ############################################################################
+    # ----------------- Methods for mask dataset. -----------------
+    def mask_by_wkt_poly(self, 
+        wkt_poly: str | shapely.Polygon, 
+        in_wkt_crs: str,
+        nodata: Any=np.nan,
+        **kwargs
+    ) -> gdal.Dataset:
+        """
+        """
+        # ポリゴンの投影法が異なり、かつ指定されている場合は、ポリゴンを投影変換する
+        pass
+    
+    def get_mask_array(self, 
+        wkt_geom: str,
+        in_wkt_crs: str,
+        masked_value: Any,
+        bands: List[int] = [1],
+        all_touched: bool=True,
+        inverse: bool=False
+    ) -> np.ndarray:
+        """
+        """
+        # マスクデータの取得
+        if in_wkt_crs != self.GetProjection():
+            wkt_geom = gdal_utils.reprojection_geometry(
+                wkt_geometry=wkt_geom, 
+                in_wkt_crs=in_wkt_crs, 
+                out_wkt_crs=self.GetProjection()
+            )
+        data_source = self._create_poly_lyr(wkt_geom, self.GetProjection())
+        mask_lyr = data_source.GetLayer(0)
+        mask_dst = self.copy_dataset()
+        ops = dict(ALL_TOUCHED=all_touched)
+        gdal.RasterizeLayer(
+            mask_dst, bands, mask_lyr, 
+            burn_values=[masked_value], options=ops
+        )
+        ary = mask_dst.ReadAsArray()
+        mask_dst = None
+        if inverse:
+            # Optionsの'INVERSE'が機能しないため、ここでマスクを反転させる
+            if np.isnan(masked_value):
+                inversed_ary = np.where(np.isnan(ary), ary, masked_value)
+            else:
+                inversed_ary = np.where(ary == masked_value, ary, masked_value)
+            return inversed_ary
+        else:
+            return ary
+
+
+        
+        
+    
+    def _create_poly_lyr(self,
+        wkt_poly: str, 
+        in_wkt_crs: str,
+    ) -> ogr.DataSource:
+        """
+        ## Summary
+        WKT-PolygonをOGRレイヤーに変換する。これは`gdal.Dataset`をmaskする際に使用するので、in_wkt_crsとgdal.Datasetの投影法が異なる場合は、WKT-Polygonを投影変換する。
+        Args:
+            wkt_poly(str): WKT形式のポリゴン
+            in_wkt_crs(str): 入力のWKT-CRS
+        Returns:
+            ogr.Layer: OGRレイヤー
+        Examples:
+            >>> vector_dst = self._create_poly_lyr(wkt_poly, in_wkt_crs)
+            >>> lyr = vector_dst.GetLayer(0)
+        """
+        if in_wkt_crs != self.GetProjection():
+            wkt_poly = gdal_utils.reprojection_geometry(
+                wkt_geometry=wkt_poly, 
+                in_wkt_crs=in_wkt_crs, 
+                out_wkt_crs=self.GetProjection()
+            )
+            in_wkt_crs = self.GetProjection()
+        srs = osr.SpatialReference()
+        srs.ImportFromWkt(in_wkt_crs)
+        vector_dst = ogr.GetDriverByName('Memory').CreateDataSource('out')
+        lyr = vector_dst.CreateLayer('poly', srs, ogr.wkbPolygon)
+        feature_defn = lyr.GetLayerDefn()
+        feature = ogr.Feature(feature_defn)
+        feature.SetGeometry(ogr.CreateGeometryFromWkt(wkt_poly))
+        lyr.CreateFeature(feature)
+        return vector_dst
+
+
+
     #############################################################################
     # ----------------- Methods for obtaining cells statistics. -----------------
     def plot_raster(self, 
@@ -1096,3 +1188,35 @@ class CustomGdalDataset:
             shrink = kwargs.get('shrink', 0.8)
             fig.colorbar(cb, shrink=shrink)
 
+
+
+if __name__ == '__main__':
+    PolyEPSG6672 = 'Polygon ((-56172.36197734979214147 19105.51510242166841635, -56145.31507482784945751 18969.85677036452034372, -56019.89000399682845455 18947.47186182229779661, -56027.97188793602981605 19040.08551596032339148, -55945.78907799107400933 19102.63893258880125359, -56172.36197734979214147 19105.51510242166841635))'
+    PolyEPSG4326 = 'Polygon ((132.89793009154337255 33.17079622959473539, 132.89839154679992816 33.17002360891625301, 132.89878851253519088 33.16946785688683974, 132.89961420126459757 33.16946785688683974, 132.89917489251755001 33.17020356671624626, 132.89856941530652534 33.1707891259973664, 132.89856941530652534 33.1707891259973664, 132.89793009154337255 33.17079622959473539))'
+    
+    file_path = r'D:/Repositories/ProcessingRaster/datasets/test/DTM__R10__EPSG6672.tif'
+    dst = gdal.Open(file_path)
+    dataset = CustomGdalDataset(dst)
+    lyr = dataset._create_poly_lyr(PolyEPSG6672, dataset.GetProjection())
+    driver = gdal.GetDriverByName('MEM')
+    driver.Register()
+    new_dst = driver.Create(
+        '', 
+        dst.RasterXSize, 
+        dst.RasterYSize, 
+        1, 
+        gdal.GDT_Float32
+    )
+    new_dst.SetGeoTransform(dst.GetGeoTransform())
+    new_dst.SetProjection(dst.GetProjection())
+
+
+    gdal.RasterizeLayer(new_dst, [1], lyr, burn_values=[1])
+    ary = new_dst.ReadAsArray()
+
+    extent = (-56197.4467, -55933.3643, 18940.8764, 19138.9382)
+    plt.imshow(ary, extent=extent)
+    plt.colorbar()
+    plt.show()
+        
+    
