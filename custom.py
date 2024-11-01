@@ -7,7 +7,8 @@ from typing import Dict
 from typing import Generator
 from typing import List
 from typing import NamedTuple
-from typing import Tuple
+from typing import Optional
+from typing import Union
 
 import geopandas as gpd
 from matplotlib import pyplot as plt
@@ -72,18 +73,44 @@ class CustomGdalDataset:
 
     def __getattr__(self, module_name):
         return getattr(self.dataset, module_name)
-    
+     
     @staticmethod
-    def __check_crs(func):
-        def wrapper(self, out_wkt_crs=None, *args, **kwargs):
-            if out_wkt_crs is None:
+    def __check_crs(crs_index: int):
+        """
+        CRSが正しく指定されているかチェックするデコレータ
+        Args:
+            crs_index(int): CRSが指定されている位置引数のインデックス
+        """
+        def decorator(func: Callable):
+            def wrapper(self, *args, **kwargs):
+                def convert_crs(crs: Any) -> str:
+                    """CRSをWkt形式に変換する"""
+                    if isinstance(crs, str) or isinstance(crs, int):
+                        return pyproj.CRS(crs).to_wkt()
+                    elif isinstance(crs, pyproj.CRS):
+                        return crs.to_wkt()
+                    else:
+                        custom_gdal_exception.unknown_crs_err()
+                # CRSが指定されているかチェック
+                crs = None
+                in_args = True
+                if crs_index < len(args):
+                    crs = args[crs_index]
+                elif 'crs' in kwargs:
+                    crs = kwargs['crs']
+                # CRSをWkt形式に変換
+                crs = convert_crs(crs)
+                if crs is not None:
+                    if in_args:
+                        args = list(args)
+                        args[crs_index] = crs
+                    else:
+                        kwargs['crs'] = crs
+                else:
+                    raise custom_gdal_exception.crs_not_found_err()
                 return func(self, *args, **kwargs)
-            try:
-                _ = pyproj.CRS(out_wkt_crs)
-            except:
-                custom_gdal_exception.unknown_crs_err()
-            return func(self, out_wkt_crs, *args, **kwargs)
-        return wrapper
+            return wrapper
+        return decorator
     
     @staticmethod
     def __check_datum(func):
@@ -106,43 +133,46 @@ class CustomGdalDataset:
         return wrapper
 
     @staticmethod
-    def __pyproj_to_wkt_crs(func):
-        def wrapper(self, obj=None, *args, **kwargs):
-            if obj is None:
-                return func(self, obj, *args, **kwargs)
-            elif isinstance(obj, pyproj.CRS):
-                return func(self, obj.to_wkt(), *args, **kwargs)
-            return func(self, obj, *args, **kwargs)
-        return wrapper
-
-    @staticmethod
-    def __wkt_geometry_check(func: Callable) -> str:
-    # ジオメトリがWKT形式であるかチェックする。shapely.geometryだった場合はWKT形式に変換する
-        def wrapper(self, *args, **kwargs):
-            args_ = False
-            if 'wkt_poly' not in kwargs.keys():
-                poly = args[0]
-                args_ = True
-            else:
-                poly = kwargs.get('wkt_poly')
-            if isinstance(poly, str):
-                try:
-                    shapely.from_wkt(poly)
-                except shapely.errors.WKTReadingError:
-                    custom_gdal_exception.load_wkt_geometry_err()
+    def __wkt_geometry_check(geom_index: int) -> str:
+        """
+        ジオメトリがWKT形式であるかチェックする。shapely.geometryだった場合はWKT形式に変換する
+        Args:
+            geom_index(int): ジオメトリが指定されている位置引数のインデックス
+        """
+        def decorator(func: Callable):
+            def wrapper(self, *args, **kwargs):
+                # geometryの取得
+                geom = None
+                in_args = True
+                if geom_index < len(args):
+                    geom = args[geom_index]
+                elif 'geom' in kwargs:
+                    geom = kwargs['geom']
+                    in_args = False
                 else:
-                    return func(self, *args, **kwargs)
-            elif isinstance(poly, shapely.geometry.base.BaseGeometry):
-                if args_:
-                    lst = list(args)
-                    lst[2] = poly.wkt
-                    args = tuple(lst)
+                    raise ValueError('The geometry argument was not found.')
+                # WKT形式に変換
+                if isinstance(geom, str):
+                    try:
+                        geom = shapely.from_wkt(geom)
+                    except:
+                        custom_gdal_exception.load_wkt_geometry_err()
+                elif isinstance(geom, shapely.geometry.base.BaseGeometry):
+                    using = ['POINT', 'MULTIPOINT', 
+                             'LINESTRING', 'MULTILINESTRING', 
+                             'LINERGING', 'MULTILINERGING',
+                             'POLYGON', 'MULTIPOLYGON']
+                    if geom.geom_type not in using:
+                        raise ValueError('The geometry type is not supported.')
+                # geometryを引数にセット
+                if in_args:
+                    args = list(args)
+                    args[geom_index] = geom.wkt
                 else:
-                    kwargs['wkt_poly'] = poly.wkt
+                    kwargs['geom'] = geom.wkt
                 return func(self, *args, **kwargs)
-            else:
-                custom_gdal_exception.load_wkt_geometry_err()
-        return wrapper
+            return wrapper
+        return decorator
 
     @property
     def x_resolution(self):
@@ -511,13 +541,13 @@ class CustomGdalDataset:
         y_min = y_max + rows * self.y_resolution
         return Bounds(x_min, y_min, x_max, y_max)
     
-    @__pyproj_to_wkt_crs
-    @__check_crs
-    def reprojected_bounds(self, out_wkt_crs: str) -> Bounds:
+    @__check_crs(0)
+    def reprojected_bounds(self, 
+        out_crs: Optional[Union[str, int, pyproj.CRS]]) -> Bounds:
         """
         投影変換した後の範囲を取得する。
         Args:
-            out_wkt_crs(str): 出力先のWKT-CRS
+            out_wkt_crs(str | int | pyproj.CRS): 出力先のCRS
         Returns:
             Bounds(NamedTuple): 投影変換後の範囲。(x_min, y_min, x_max, y_max)
         Examples:
@@ -530,18 +560,16 @@ class CustomGdalDataset:
         xs, ys = gdal_utils.reproject_xy(
             [bounds.x_min, bounds.x_max], 
             [bounds.y_min, bounds.y_max], 
-            in_crs, out_wkt_crs
+            in_crs, out_crs
         )
         return Bounds(xs[0], ys[0], xs[1], ys[1])
     
-    @__pyproj_to_wkt_crs
-    @__check_crs
-    def center(self, out_wkt_crs: str=None) -> XY:
+    @__check_crs(0)
+    def center(self, out_crs: Optional[Union[str, int, pyproj.CRS]]) -> XY:
         """
         `gdal.Dataset`の中心座標を取得する。
         Args:
-            kwargs:
-                - out_wkt_crs(str): 出力先のWKT-CRS
+            out_crs(str | int | pyproj.CRS): 出力先のCRS
         Returns:
             XY(NamedTuple): (x, y)
         Examples:
@@ -552,8 +580,8 @@ class CustomGdalDataset:
         bounds = self.bounds()
         x = (bounds.x_min + bounds.x_max) / 2
         y = (bounds.y_min + bounds.y_max) / 2
-        if not out_wkt_crs is None:
-            return gdal_utils.reproject_xy(x, y, self.GetProjection(), out_wkt_crs)
+        if not out_crs is None:
+            return gdal_utils.reproject_xy(x, y, self.GetProjection(), out_crs)
         return XY(x, y)
 
     def cells_center_coordinates(self) -> CenterCoordinates:
@@ -776,13 +804,12 @@ class CustomGdalDataset:
 
     ############################################################################
     # ----------------- Methods for projection transform. -----------------
-    @__pyproj_to_wkt_crs
-    @__check_crs
-    def reprojected_dataset(self, out_wkt_crs: str) -> gdal.Dataset:
+    @__check_crs(0)
+    def reprojected_dataset(self, out_crs: str) -> gdal.Dataset:
         """
         'gdal.Dataset'の投影変換
         Args:
-            out_crs(str): 出力のWKT-CRS
+            out_crs(str | int | pyproj.CRS): 出力のCRS. WKT形式、EPSGコード、pyproj.CRSのいずれか
         Returns:
             (gdal.Dataset): 投影変換後のラスターデータ
         Examples:
@@ -794,8 +821,8 @@ class CustomGdalDataset:
         ops = gdal.WarpOptions(
             format='MEM',
             srcSRS=self.GetProjection(),
-            dstSRS=out_wkt_crs,
-            outputBounds=self.reprojected_bounds(out_wkt_crs),
+            dstSRS=out_crs,
+            outputBounds=self.reprojected_bounds(out_crs),
             width=self.RasterXSize,
             height=self.RasterYSize,
             resampleAlg=gdal.GRA_CubicSpline
@@ -1053,18 +1080,7 @@ class CustomGdalDataset:
 
     ############################################################################
     # ----------------- Methods for mask dataset. -----------------
-    def mask_by_wkt_poly(self, 
-        wkt_poly: str | shapely.Polygon, 
-        in_wkt_crs: str,
-        nodata: Any=np.nan,
-        **kwargs
-    ) -> gdal.Dataset:
-        """
-        """
-        # ポリゴンの投影法が異なり、かつ指定されている場合は、ポリゴンを投影変換する
-        pass
-    
-    def get_mask_array(self, 
+    def get_masked_array(self, 
         wkt_geom: str,
         in_wkt_crs: str,
         masked_value: Any,
@@ -1073,15 +1089,23 @@ class CustomGdalDataset:
         inverse: bool=False
     ) -> np.ndarray:
         """
+        ## Summary
+        Geometryでラスターデータをマスクする。このメソッドは、Geometryの投影法が異なる場合にも使用できる。
+        Args:
+            wkt_geom(str): WKT形式のGeometry
+            in_wkt_crs(str): 入力のWKT-CRS
+            masked_value(Any): マスクする値
+            bands(List[int], optional): バンド番号. Defaults to [1].
+            all_touched(bool, optional): マスクするセルの条件. Defaults to True.
+            inverse(bool, optional): マスクを反転するかどうか. Defaults to False.
+        Returns:
+            np.ndarray: マスク後のラスターデータ
+        Examples:
+            >>> wkt_geom = 'POLYGON ((x1 y1, x2 y2, x3 y3, x4 y4, x1 y1))'
+            >>> masked_value = np.nan
+            >>> ary = dst.get_masked_array(wkt_geom, masked_value)
         """
-        # マスクデータの取得
-        if in_wkt_crs != self.GetProjection():
-            wkt_geom = gdal_utils.reprojection_geometry(
-                wkt_geometry=wkt_geom, 
-                in_wkt_crs=in_wkt_crs, 
-                out_wkt_crs=self.GetProjection()
-            )
-        data_source = self._create_poly_lyr(wkt_geom, self.GetProjection())
+        data_source = self._create_ogr_lyr(wkt_geom, in_wkt_crs)
         mask_lyr = data_source.GetLayer(0)
         mask_dst = self.copy_dataset()
         ops = dict(ALL_TOUCHED=all_touched)
@@ -1100,44 +1124,102 @@ class CustomGdalDataset:
             return inversed_ary
         else:
             return ary
-
-
-        
-        
     
-    def _create_poly_lyr(self,
-        wkt_poly: str, 
+    def _create_ogr_lyr(self,
+        wkt_geom: str, 
         in_wkt_crs: str,
     ) -> ogr.DataSource:
         """
         ## Summary
         WKT-PolygonをOGRレイヤーに変換する。これは`gdal.Dataset`をmaskする際に使用するので、in_wkt_crsとgdal.Datasetの投影法が異なる場合は、WKT-Polygonを投影変換する。
         Args:
-            wkt_poly(str): WKT形式のポリゴン
+            wkt_geom(str): WKT形式のGeometry
             in_wkt_crs(str): 入力のWKT-CRS
         Returns:
             ogr.Layer: OGRレイヤー
         Examples:
-            >>> vector_dst = self._create_poly_lyr(wkt_poly, in_wkt_crs)
+            >>> vector_dst = self._create_poly_lyr(wkt_geom, in_wkt_crs)
             >>> lyr = vector_dst.GetLayer(0)
         """
         if in_wkt_crs != self.GetProjection():
-            wkt_poly = gdal_utils.reprojection_geometry(
-                wkt_geometry=wkt_poly, 
+            wkt_geom = gdal_utils.reprojection_geometry(
+                wkt_geometry=wkt_geom, 
                 in_wkt_crs=in_wkt_crs, 
                 out_wkt_crs=self.GetProjection()
             )
             in_wkt_crs = self.GetProjection()
-        srs = osr.SpatialReference()
-        srs.ImportFromWkt(in_wkt_crs)
-        vector_dst = ogr.GetDriverByName('Memory').CreateDataSource('out')
-        lyr = vector_dst.CreateLayer('poly', srs, ogr.wkbPolygon)
-        feature_defn = lyr.GetLayerDefn()
-        feature = ogr.Feature(feature_defn)
-        feature.SetGeometry(ogr.CreateGeometryFromWkt(wkt_poly))
-        lyr.CreateFeature(feature)
-        return vector_dst
+        in_geom_type = shapely.from_wkt(wkt_geom).geom_type.upper()
+        # GeoemtryTypes
+        geom_types = {
+            'POINT': ogr.wkbPoint,
+            'MULTIPOINT': ogr.wkbMultiPoint,
+            'LINESTRING': ogr.wkbLineString,
+            'MULTILINESTRING': ogr.wkbMultiLineString,
+            'LINEARRING': ogr.wkbLinearRing,
+            'MULTILINEARRING': ogr.wkbMultiLineString,
+            'POLYGON': ogr.wkbPolygon,
+            'MULTIPOLYGON': ogr.wkbMultiPolygon
+        }
+        geom_type = geom_types.get(in_geom_type)
+        if geom_type is not None:
+            srs = osr.SpatialReference()
+            srs.ImportFromWkt(in_wkt_crs)
+            vector_dst = ogr.GetDriverByName('Memory').CreateDataSource('out')
+            lyr = vector_dst.CreateLayer('', srs, geom_type)
+            feature_defn = lyr.GetLayerDefn()
+            feature = ogr.Feature(feature_defn)
+            feature.SetGeometry(ogr.CreateGeometryFromWkt(wkt_geom))
+            lyr.CreateFeature(feature)
+            return vector_dst
+        else:
+            raise ValueError('Invalid geometry type')
 
+    ############################################################################
+    # ----------------- Statistical methods for dataset. -----------------
+    def normalized_array(self):
+        """
+        ## Summary
+        ラスターデータを正規化する
+        Returns:
+            np.ndarray: 正規化後のラスターデータ
+        """
+        ary = self.ReadAsArray()
+        min_ = np.nanmin(ary)
+        max_ = np.nanmax(ary)
+        return (ary - min_) / (max_ - min_)
+    
+    def outlier_treatment_array_by_std(self, sigma: float=2):
+        """
+        ## Summary
+        ラスターデータの外れ値を標準偏差で処理する
+        Args:
+            threshold(float, optional): 標準偏差の倍数. Defaults to 2.
+        Returns:
+            np.ndarray: 外れ値処理後のラスターデータ
+        """
+        ary = self.ReadAsArray()
+        mean = np.nanmean(ary)
+        std = np.nanstd(ary)
+        upper = mean + sigma * std
+        lower = mean - sigma * std
+        return np.where(upper < ary, upper, np.where(ary < lower, lower, ary))
+    
+    def outlier_treatment_array_by_quantile(self, threshold: float=1.5):
+        """
+        ## Summary
+        ラスターデータの外れ値を四分位範囲で処理する
+        Args:
+            threshold(float, optional): 四分位範囲の倍数. Defaults to 1.5.
+        Returns:
+            np.ndarray: 外れ値処理後のラスターデータ
+        """
+        ary = self.ReadAsArray()
+        q1 = np.nanpercentile(ary, 25)
+        q3 = np.nanpercentile(ary, 75)
+        iqr = q3 - q1
+        upper = q3 + threshold * iqr
+        lower = q1 - threshold * iqr
+        return np.where(upper < ary, upper, np.where(ary < lower, lower, ary))
 
 
     #############################################################################
@@ -1191,32 +1273,10 @@ class CustomGdalDataset:
 
 
 if __name__ == '__main__':
-    PolyEPSG6672 = 'Polygon ((-56172.36197734979214147 19105.51510242166841635, -56145.31507482784945751 18969.85677036452034372, -56019.89000399682845455 18947.47186182229779661, -56027.97188793602981605 19040.08551596032339148, -55945.78907799107400933 19102.63893258880125359, -56172.36197734979214147 19105.51510242166841635))'
-    PolyEPSG4326 = 'Polygon ((132.89793009154337255 33.17079622959473539, 132.89839154679992816 33.17002360891625301, 132.89878851253519088 33.16946785688683974, 132.89961420126459757 33.16946785688683974, 132.89917489251755001 33.17020356671624626, 132.89856941530652534 33.1707891259973664, 132.89856941530652534 33.1707891259973664, 132.89793009154337255 33.17079622959473539))'
-    
+    from shapely.plotting import plot_polygon
     file_path = r'D:/Repositories/ProcessingRaster/datasets/test/DTM__R10__EPSG6672.tif'
+
     dst = gdal.Open(file_path)
     dataset = CustomGdalDataset(dst)
-    lyr = dataset._create_poly_lyr(PolyEPSG6672, dataset.GetProjection())
-    driver = gdal.GetDriverByName('MEM')
-    driver.Register()
-    new_dst = driver.Create(
-        '', 
-        dst.RasterXSize, 
-        dst.RasterYSize, 
-        1, 
-        gdal.GDT_Float32
-    )
-    new_dst.SetGeoTransform(dst.GetGeoTransform())
-    new_dst.SetProjection(dst.GetProjection())
-
-
-    gdal.RasterizeLayer(new_dst, [1], lyr, burn_values=[1])
-    ary = new_dst.ReadAsArray()
-
-    extent = (-56197.4467, -55933.3643, 18940.8764, 19138.9382)
-    plt.imshow(ary, extent=extent)
-    plt.colorbar()
-    plt.show()
-        
-    
+    in_crs = pyproj.CRS(3857).to_wkt()
+    print(dataset.reprojected_bounds(in_crs))
