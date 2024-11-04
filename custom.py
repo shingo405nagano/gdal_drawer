@@ -12,17 +12,22 @@ from typing import Union
 
 import geopandas as gpd
 from matplotlib import pyplot as plt
+from matplotlib.axes import Axes
+from matplotlib.figure import Figure
+from matplotlib.patches import Patch
 import numpy as np
 from osgeo import gdal
 from osgeo import ogr
 from osgeo import osr
 import pandas as pd
 import pyproj
+import scipy.ndimage
 import shapely
 gdal.UseExceptions()
 
 from gdal_utils import GdalUtils
 from utils.exceptions import custom_gdal_exception
+from kernels import kernels
 gdal_utils = GdalUtils()
 
 
@@ -75,7 +80,7 @@ class CustomGdalDataset:
         return getattr(self.dataset, module_name)
      
     @staticmethod
-    def __check_crs(crs_index: int):
+    def __check_crs(crs_index: int, crs_arg_name: str):
         """
         CRSが正しく指定されているかチェックするデコレータ
         Args:
@@ -89,6 +94,8 @@ class CustomGdalDataset:
                         return pyproj.CRS(crs).to_wkt()
                     elif isinstance(crs, pyproj.CRS):
                         return crs.to_wkt()
+                    elif crs is None:
+                        return None
                     else:
                         custom_gdal_exception.unknown_crs_err()
                 # CRSが指定されているかチェック
@@ -96,18 +103,18 @@ class CustomGdalDataset:
                 in_args = True
                 if crs_index < len(args):
                     crs = args[crs_index]
-                elif 'crs' in kwargs:
-                    crs = kwargs['crs']
+                elif crs_arg_name in kwargs:
+                    crs = kwargs[crs_arg_name]
+                    in_args = False
+                else:
+                    in_args = False
                 # CRSをWkt形式に変換
                 crs = convert_crs(crs)
-                if crs is not None:
-                    if in_args:
-                        args = list(args)
-                        args[crs_index] = crs
-                    else:
-                        kwargs['crs'] = crs
+                if in_args:
+                    args = list(args)
+                    args[crs_index] = crs
                 else:
-                    raise custom_gdal_exception.crs_not_found_err()
+                    kwargs[crs_arg_name] = crs
                 return func(self, *args, **kwargs)
             return wrapper
         return decorator
@@ -124,16 +131,30 @@ class CustomGdalDataset:
         return wrapper
 
     @staticmethod
-    def __is_iterable_of_ints(func):
-        def wrapper(self, obj, *args, **kwargs):
-            if isinstance(obj, Iterable):
-                if all(isinstance(item, int) for item in obj):
-                    return func(self, obj, *args, **kwargs)
-            custom_gdal_exception.get_band_number_err()
-        return wrapper
-
+    def __is_iterable_of_ints(arg_index: int, arg_name: str):
+        def decorator(func):
+            def wrapper(self, *args, **kwargs):
+                if arg_index < len(args):
+                    value = args[arg_index]
+                elif arg_name in kwargs:
+                    value = kwargs[arg_name]
+                else:
+                    value = None
+                
+                if isinstance(value, Iterable):
+                    if all(isinstance(item, int) for item in value):
+                        return func(self, *args, **kwargs)
+                elif isinstance(value, int):
+                    return func(self, *args, **kwargs)
+                elif value is None:
+                    return func(self, *args, **kwargs)
+                else:
+                    custom_gdal_exception.get_band_number_err()
+            return wrapper
+        return decorator
+    
     @staticmethod
-    def __wkt_geometry_check(geom_index: int) -> str:
+    def __wkt_geometry_check(arg_index: int, arg_name: str) -> str:
         """
         ジオメトリがWKT形式であるかチェックする。shapely.geometryだった場合はWKT形式に変換する
         Args:
@@ -144,10 +165,10 @@ class CustomGdalDataset:
                 # geometryの取得
                 geom = None
                 in_args = True
-                if geom_index < len(args):
-                    geom = args[geom_index]
-                elif 'geom' in kwargs:
-                    geom = kwargs['geom']
+                if arg_index < len(args):
+                    geom = args[arg_index]
+                elif arg_name in kwargs:
+                    geom = kwargs[arg_name]
                     in_args = False
                 else:
                     raise ValueError('The geometry argument was not found.')
@@ -162,18 +183,32 @@ class CustomGdalDataset:
                              'LINESTRING', 'MULTILINESTRING', 
                              'LINERGING', 'MULTILINERGING',
                              'POLYGON', 'MULTIPOLYGON']
-                    if geom.geom_type not in using:
+                    if geom.geom_type.upper() not in using:
                         raise ValueError('The geometry type is not supported.')
                 # geometryを引数にセット
                 if in_args:
                     args = list(args)
-                    args[geom_index] = geom.wkt
+                    args[arg_index] = geom.wkt
                 else:
-                    kwargs['geom'] = geom.wkt
+                    kwargs[arg_name] = geom.wkt
                 return func(self, *args, **kwargs)
             return wrapper
         return decorator
 
+    @staticmethod
+    def __band_check(count: int):
+        """
+        datasetのBand数が指定された数と一致するかチェックする
+        """
+        def decorator(func):
+            def wrapper(self, *args, **kwargs):
+                if self.RasterCount == count:
+                    return func(self, *args, **kwargs)
+                else:
+                    custom_gdal_exception.band_count_err(count)
+            return wrapper
+        return decorator
+        
     @property
     def x_resolution(self):
         """
@@ -192,6 +227,7 @@ class CustomGdalDataset:
         """
         return self.GetGeoTransform()[-1]
 
+    @__is_iterable_of_ints(0, 'band_numbers')
     def array(self, band_numbers: int | Iterable[int]=None) -> np.ndarray:
         """
         gdal.Datasetから配列を取得する。この関数はFloat型のNoDataをnp.nanに変換し、バンドのNoDataも書き換える。
@@ -247,7 +283,6 @@ class CustomGdalDataset:
             return self._get_float_ary(band)
         return band.ReadAsArray()
 
-    @__is_iterable_of_ints
     def _get_selected_arys(self, band_nums: List[int]) -> np.ndarray:
         """
         Listで指定したバンドの配列を取得する
@@ -394,7 +429,7 @@ class CustomGdalDataset:
         driver.Register()
         new_dst = self.__create_dataset(data_type)
         band = new_dst.GetRasterBand(1)
-        ary = nodata_to(ary, band.GetNoDataValue(), out_nodata)
+        ary = self._nodata_to(ary, band.GetNoDataValue(), out_nodata)
         band.WriteArray(ary)
         band.SetNoDataValue(out_nodata)
         return CustomGdalDataset(new_dst)
@@ -426,6 +461,16 @@ class CustomGdalDataset:
             band.SetNoDataValue(out_nodata)
         return CustomGdalDataset(new_dst)
     
+    def _nodata_to(self, 
+        ary: np.ndarray, 
+        in_nodata: Any, 
+        out_nodata: Any
+    ) -> gdal.Dataset:
+        ary = np.where(ary == in_nodata, out_nodata, ary)
+        ary = np.where(np.isnan(ary), out_nodata, ary)
+        ary = np.where(np.isinf(ary), out_nodata, ary)
+        return ary
+
     def __create_dataset(self, data_type: int) -> gdal.Driver:
         """
         メモリ上に新しい`gdal.Dataset`を作成する。
@@ -541,9 +586,10 @@ class CustomGdalDataset:
         y_min = y_max + rows * self.y_resolution
         return Bounds(x_min, y_min, x_max, y_max)
     
-    @__check_crs(0)
+    @__check_crs(0, 'out_crs')
     def reprojected_bounds(self, 
-        out_crs: Optional[Union[str, int, pyproj.CRS]]) -> Bounds:
+        out_crs: Optional[Union[str, int, pyproj.CRS]]
+    ) -> Bounds:
         """
         投影変換した後の範囲を取得する。
         Args:
@@ -564,8 +610,8 @@ class CustomGdalDataset:
         )
         return Bounds(xs[0], ys[0], xs[1], ys[1])
     
-    @__check_crs(0)
-    def center(self, out_crs: Optional[Union[str, int, pyproj.CRS]]) -> XY:
+    @__check_crs(0, 'out_crs')
+    def center(self, out_crs: Optional[Union[str, int, pyproj.CRS]]=None) -> XY:
         """
         `gdal.Dataset`の中心座標を取得する。
         Args:
@@ -634,7 +680,7 @@ class CustomGdalDataset:
         }
         # 各バンドの値を取得
         band = self.GetRasterBand(1)
-        ary = nodata_to(self.ReadAsArray(), band.GetNoDataValue(), np.nan)
+        ary = self._nodata_to(self.ReadAsArray(), band.GetNoDataValue(), np.nan)
         data_type = band.DataType
         dst = self.write_ary_to_mem(ary, data_type, np.nan)
         for i in range(self.RasterCount):
@@ -804,7 +850,7 @@ class CustomGdalDataset:
 
     ############################################################################
     # ----------------- Methods for projection transform. -----------------
-    @__check_crs(0)
+    @__check_crs(0, 'out_crs')
     def reprojected_dataset(self, out_crs: str) -> gdal.Dataset:
         """
         'gdal.Dataset'の投影変換
@@ -971,7 +1017,6 @@ class CustomGdalDataset:
 
     ############################################################################
     # ----------------- Methods for clipping dataset. -----------------
-    @__wkt_geometry_check
     def _clip_option_template_with_wkt_poly_spec(self,
         wkt_poly: str,
         fmt: str='MEM',
@@ -1001,6 +1046,7 @@ class CustomGdalDataset:
             srcNodata=dst.GetRasterBand(1).GetNoDataValue()
         )
     
+    @__wkt_geometry_check(0, 'wkt_poly')
     def clip_by_wkt_poly(self, 
         wkt_poly: str | shapely.Polygon, 
         nodata: Any=np.nan,
@@ -1028,6 +1074,7 @@ class CustomGdalDataset:
         )
         return CustomGdalDataset(gdal.Warp('', self.dataset, options=options))
     
+    @__wkt_geometry_check(0, 'wkt_poly')
     def clip_by_bounds(self, 
         wkt_poly: str | shapely.Polygon,
         nodata: Any=np.nan,
@@ -1053,6 +1100,7 @@ class CustomGdalDataset:
         poly_crs = kwargs.get('poly_crs', self.GetProjection())
         return self.clip_by_wkt_poly(wkt_poly, nodata, poly_crs=poly_crs)
 
+    @__wkt_geometry_check(0, 'wkt_poly')
     def clip_by_fit_bounds(self, 
         wkt_poly: str | shapely.Polygon, 
         nodata: Any=np.nan, 
@@ -1080,6 +1128,8 @@ class CustomGdalDataset:
 
     ############################################################################
     # ----------------- Methods for mask dataset. -----------------
+    @__wkt_geometry_check(0, 'wkt_geom')
+    @__check_crs(1, 'in_wkt_crs')
     def get_masked_array(self, 
         wkt_geom: str,
         in_wkt_crs: str,
@@ -1221,13 +1271,354 @@ class CustomGdalDataset:
         lower = q1 - threshold * iqr
         return np.where(upper < ary, upper, np.where(ary < lower, lower, ary))
 
+    ############################################################################
+    # ----------------- DEM processing methods for dathaset. -----------------
+    @__band_check(count=1)
+    def hillshade(self, 
+        azimuth: int=315, 
+        altitude: int=45,
+        z_factor: float=1,
+        **kwargs
+    ) -> gdal.Dataset:
+        """
+        ## Summary
+        陰影起伏図を作成する。このメソッドは、DEM（DTM)の処理に使用される。
+        Args:
+            azimuth(int, optional): 方位角. Defaults to 315.
+            altitude(int, optional): 高度. Defaults to 45.
+            z_factor(float, optional): Zファクター. Defaults to 1.
+            kwargs:
+                - alg(str): アルゴリズム. Horn | ZevenbergenThorne. Defaults to 'Horn'.
+                - scale(float, optional): Ratio of vertical units to horizontal. If the horizontal unit of the source DEM is degrees (e.g Lat/Long WGS84 projection), you can use scale=111120 if the vertical units are meters (or scale=370400 if they are in feet)
+                - combined(bool): combined shading, a combination of slope and oblique shading. Defaults to False.
+                - multiDirectional(bool): multidirectional shading, a combination of hillshading illuminated from 225 deg, 270 deg, 315 deg, and 360 deg azimuth.
+                - return_array(bool): If True, return the result as a numpy array. Defaults to False.
+        Returns:
+            gdal.Dataset(CustomGdalDataset): 陰影起伏図の`gdal.Dataset`
+        """
+        # return_arrayが指定されている場合は、その値を取得して削除する
+        return_array = kwargs.get('return_array', False)
+        if 'return_array' in kwargs:
+            del kwargs['return_array']
+
+        options = {
+            'destName': '',
+            'srcDS': self.dataset,
+            'processing': 'hillshade',
+            'format': 'MEM',
+            'azimuth': azimuth,
+            'altitude': altitude,
+            'zFactor': z_factor,
+        }
+        options.update(kwargs)
+        if 'multiDirectional' in options:
+            if options.get('multiDirectional') == True:
+                del options['combined']
+                del options['azimuth']
+        new_dst = gdal.DEMProcessing(**options)
+        if return_array:
+            # return_arrayが指定されている場合は、numpy配列で返す
+            hillshade_ary = new_dst.ReadAsArray()
+            new_dst = None
+            return hillshade_ary
+        return CustomGdalDataset(new_dst)
+
+    @__band_check(count=1)
+    def slope(self, **kwargs) -> gdal.Dataset:
+        """
+        ## Summary
+        勾配を計算する。このメソッドは、DEM（DTM)の処理に使用される。
+        Args:
+            kwargs:
+                - alg(str): アルゴリズム. ZevenbergenThorne | Horn. Defaults to 'Horn'.
+                - percent(bool): 勾配をパーセントで出力するかどうか. Defaults to False.
+        Returns:
+            gdal.Dataset(CustomGdalDataset): 勾配の`gdal.Dataset`.
+        """
+        # return_arrayが指定されている場合は、その値を取得して削除する
+        return_array = kwargs.get('return_array', False)
+        if 'return_array' in kwargs:
+            del kwargs['return_array']
+
+        options = {
+            'destName': '',
+            'srcDS': self.dataset,
+            'processing': 'slope',
+            'format': 'MEM',
+        }
+        options.update(kwargs)
+        options_list = None
+        if 'percent' in options:
+            if options.get('percent') == True:
+                del options['percent']
+                options_list = ['-p']
+        if options_list is None:
+            new_dst = gdal.DEMProcessing(**options)
+        else:
+            new_dst = gdal.DEMProcessing(**options, options=options_list)
+        # Nodataが-9999の場合は、nanに変換し書き換える。
+        ary = new_dst.ReadAsArray()
+        band = new_dst.GetRasterBand(1)
+        band.WriteArray(np.where(ary == -9999, np.nan, ary))
+        band.SetNoDataValue(np.nan)
+        if return_array:
+            # return_arrayが指定されている場合は、numpy配列で返す
+            slope_ary = new_dst.ReadAsArray()
+            new_dst = None
+            return slope_ary
+        return CustomGdalDataset(new_dst)
+
+    @__band_check(count=1)
+    def aspect(self, zero_for_flat=True, **kwargs) -> gdal.Dataset:
+        """
+        ## Summary
+        傾斜方位を計算する。このメソッドは、DEM（DTM)の処理に使用される。
+        Args:
+            zero_for_flat(bool, optional): 平坦部を0度にするかどうか、Falseならば-9999になる. Defaults to True.
+            kwargs:
+                - alg(str): アルゴリズム. ZevenbergenThorne | Horn. Defaults to 'Horn'.
+        Returns:
+            gdal.Dataset(CustomGdalDataset): 傾斜方位の`gdal.Dataset`.
+        """
+        # return_arrayが指定されている場合は、その値を取得して削除する
+        return_array = kwargs.get('return_array', False)
+        if 'return_array' in kwargs:
+            del kwargs['return_array']
+
+        options = {
+            'destName': '',
+            'srcDS': self.dataset,
+            'processing': 'aspect',
+            'format': 'MEM',
+        }
+        options.update(kwargs)
+        if zero_for_flat:
+            options_list = ['-zero_for_flat']
+            new_dst = gdal.DEMProcessing(**options, options=options_list)
+        else:
+            new_dst = gdal.DEMProcessing(**options)
+        if return_array:
+            # return_arrayが指定されている場合は、numpy配列で返す
+            aspect_ary = new_dst.ReadAsArray()
+            new_dst = None
+            return aspect_ary
+        return CustomGdalDataset(new_dst)
+
+    @__band_check(count=1)
+    def tri(self, **kwargs) -> gdal.Dataset:
+        """
+        ## Summary
+        TRI（Topographic Roughness Index）を計算する。このメソッドは、DEM（DTM)の処理に使用される。
+        Args:
+            kwargs:
+                alg(str): アルゴリズムの指定。Wilson | Riley. Defaults to 'Wilson'.
+        Returns:
+            gdal.Dataset(CustomGdalDataset): TRIの`gdal.Dataset`.
+        """
+        # return_arrayが指定されている場合は、その値を取得して削除する
+        return_array = kwargs.get('return_array', False)
+        if 'return_array' in kwargs:
+            del kwargs['return_array']
+
+        options = {
+            'destName': '',
+            'srcDS': self.dataset,
+            'processing': 'TRI',
+            'format': 'MEM',
+        }
+        options.update(kwargs)
+        new_dst = gdal.DEMProcessing(**options)
+        if return_array:
+            # return_arrayが指定されている場合は、numpy配列で返す
+            tri_ary = new_dst.ReadAsArray()
+            new_dst = None
+            return tri_ary
+        return CustomGdalDataset(new_dst)
+    
+    @__band_check(count=1)
+    def tpi(self, **kwargs) -> gdal.Dataset:
+        """
+        ## Summary
+        TPI（Topographic Position Index）を計算する。このメソッドは、DEM（DTM)の処理に使用される。
+        Args:
+            kwargs:
+                - alg(str): アルゴリズムの指定。Horn | ZevenbergenThorne. Defaults to 'Horn'.
+                - kernel(2D-array): 畳み込み用のカーネルを指定する。
+                - outlier_treatment(float): 外れ値処理の倍数.指定されなければ処理されない.
+        Returns:
+            gdal.Dataset(CustomGdalDataset): TPIの`gdal.Dataset`.
+        """
+        # return_arrayが指定されている場合は、その値を取得して削除する
+        return_array = kwargs.get('return_array', False)
+        if 'return_array' in kwargs:
+            del kwargs['return_array']
+
+        if 'kernel' in kwargs:
+            # 'kernel'が指定されている場合は、指定したカーネルで畳み込み処理を行う
+            ary = self.array()
+            conved_ary = (
+                scipy
+                .ndimage
+                .convolve(ary, kwargs.get('kernel'), mode='constant')
+            )
+            tpi_ary = ary - conved_ary
+        else:
+            # 'kernel'が指定されていない場合は、DEMProcessingを使用
+            options = {
+                'destName': '',
+                'srcDS': self.dataset,
+                'processing': 'TPI',
+                'format': 'MEM',
+            }
+            if 'alg' in kwargs:
+                options['alg'] = kwargs.get('alg')
+            _new_dst = gdal.DEMProcessing(**options)
+            tpi_ary = _new_dst.ReadAsArray()
+            _new_dst = None
+        if 'outlier_treatment' in kwargs:
+            # 外れ値処理
+            tpi_ary = self._outlier_treatment(
+                ary=tpi_ary, 
+                threshold=kwargs.get('outlier_treatment')
+            )
+        if return_array:
+            # return_arrayが指定されている場合は、numpy配列で返す
+            return tpi_ary
+        return self.write_ary_to_mem(tpi_ary)
+    
+    def _outlier_treatment(self, ary: np.ndarray, threshold: float) -> np.ndarray:
+        """
+        ## Summary
+        外れ値処理を行う
+        Args:
+            ary(np.ndarray): ラスターデータ
+            threshold(float): 外れ値処理の倍数
+        Returns:
+            np.ndarray: 外れ値処理後のラスターデータ
+        """
+        q1 = np.nanpercentile(ary, 25)
+        q3 = np.nanpercentile(ary, 75)
+        iqr = q3 - q1
+        upper = q3 + threshold * iqr
+        lower = q1 - threshold * iqr
+        return np.where(upper < ary, upper, np.where(ary < lower, lower, ary))
+
+    ############################################################################
+    # --------------------- Methods for create kernels. ---------------------
+    def mean_kernel_from_distance(self, distance: float, metre: bool=True) -> np.ndarray:
+        """
+        ## Summary
+        作成したい辺の長さを元に平均カーネルを作成する。
+        作成したカーネルは、`scipy.ndimage.convolve`で使用する。
+        Args:
+            distance(int): カーネルの距離
+            metre(bool, optional): メートル単位で指定するかどうか. Defaults to True.Falseの場合はそのままの値を使用する。
+        Returns:
+            np.ndarray: 平均カーネル
+        """
+        if metre:
+            x_resol, y_resol = self.cell_size_from_metre()
+        else:
+            x_resol = self.x_resolution
+            y_resol = self.y_resolution
+        kernel_size = kernels.distance_to_kernel_size(distance, x_resol, y_resol)
+        return kernels.mean_kernel(kernel_size.x, kernel_size.y)
+    
+    def doughnut_kernel_from_distance(self, 
+        distance: float, 
+        metre: bool=True
+    ) -> np.ndarray:
+        """
+        ## Summary  
+        作成したい辺の長さを元にドーナツカーネルを作成する。
+        作成したカーネルは、`scipy.ndimage.convolve`で使用する。
+        Args:
+            distance(float): カーネルの距離
+            metre(bool, optional): メートル単位で指定するかどうか. Defaults to True.Falseの場合はそのままの値を使用する。
+        Returns:
+            np.ndarray: ドーナツカーネル
+        """
+        if metre:
+            x_resol, y_resol = self.cell_size_from_metre()
+        else:
+            x_resol = self.x_resolution
+            y_resol = self.y_resolution
+        kernel_size = kernels.distance_to_kernel_size(distance, x_resol, y_resol)
+        return kernels.doughnut_kernel(kernel_size.x, kernel_size.y)
+
+    def gaussian_kernel_from_distance(self,
+        distance: float,
+        metre: bool=True,
+        coef: float=None
+    ) -> np.ndarray:
+        """
+        ## Summary
+        作成したい辺の長さを元にガウシアンカーネルを作成する。
+        作成したカーネルは、`scipy.ndimage.convolve`で使用する。
+        Args:
+            distance(float): カーネルの距離
+            metre(bool, optional): メートル単位で指定するかどうか. Defaults to True.Falseの場合はそのままの値を使用する。
+            coef(float, optional): ガウシアンカーネルの係数. Defaults to None.
+        Returns:
+            np.ndarray: ガウシアンカーネル
+        """
+        if metre:
+            x_resol, y_resol = self.cell_size_from_metre()
+        else:
+            x_resol = self.x_resolution
+            y_resol = self.y_resolution
+        kernel_size = kernels.distance_to_kernel_size(distance, x_resol, y_resol)
+        return kernels.gaussian_kernel_from_size(kernel_size.x, kernel_size.y, coef)
+
+    def inverse_gaussian_kernel_from_distance(self, 
+        distance: float, 
+        metre: bool=True,
+        coef: float=None
+    ) -> np.ndarray:
+        """
+        ## Summary
+        作成したい辺の長さを元に逆ガウシアンカーネルを作成する。
+        作成したカーネルは、`scipy.ndimage.convolve`で使用する。
+        Args:
+            distance(float): カーネルの距離
+            metre(bool, optional): メートル単位で指定するかどうか. Defaults to True.Falseの場合はそのままの値を使用する。
+            coef(float, optional): 逆ガウシアンカーネルの係数. Defaults to None.
+        Returns:
+            np.ndarray: 逆ガウシアンカーネル
+        """
+        if metre:
+            x_resol, y_resol = self.cell_size_from_metre()
+        else:
+            x_resol = self.x_resolution
+            y_resol = self.y_resolution
+        kernel_size = kernels.distance_to_kernel_size(distance, x_resol, y_resol)
+        return kernels.inverse_gaussian_kernel_from_size(kernel_size.x, kernel_size.y, coef)
+    
+    def cell_size_from_metre(self) -> CellSize:
+        """
+        ## Summary
+        セルサイズをメートル単位で取得する
+        Returns:
+            CellSize: セルサイズ
+                x_size(float): X方向のセルサイズ
+                y_size(float): Y方向のセルサイズ
+        """
+        x_resol = self.x_resolution
+        y_resol = self.y_resolution
+        if self.check_crs_is_metre():
+            # メートル単位の場合はそのまま返す
+            return CellSize(x_size=x_resol, y_size=y_resol)
+        # メートル単位でない場合は、メートル単位に変換して返す
+        center = self.center()
+        x_resol = gdal_utils.metre_from_degree(x_resol, center.x, center.y, 5)
+        y_resol = gdal_utils.metre_from_degree(y_resol, center.x, center.y, 5)
+        return CellSize(x_size=x_resol, y_size=y_resol)
 
     #############################################################################
     # ----------------- Methods for obtaining cells statistics. -----------------
     def plot_raster(self, 
-        fig: Any,
-        ax: Any, 
-        dst: gdal.Dataset, 
+        fig: Figure,
+        ax: Axes,
         **kwargs
     ) -> None:
         """
@@ -1244,17 +1635,17 @@ class CustomGdalDataset:
                 - nodata_label_anchor(tuple): NoDataのラベルの位置. Defaults to (1.25, 1.1)
         Returns:
         """
-        scope = self.dataset_bounds(dst)
+        scope = self.bounds()
         extent = [scope.x_min, scope.x_max, scope.y_min, scope.y_max]
 
         if dst.RasterCount == 1:
             # Bandが1つの場合は、NoDataをnanに変換
-            img = self.nodata_to_nan(dst)
+            img = self.array()
         else:
             # Bandが複数の場合は、matplotlibで表示できる様に配列形状を変更
-            img = np.dstack(dst.ReadAsArray())
+            img = np.dstack(self.array())
 
-        if kwargs.get('nodata') and dst.RasterCount == 1:
+        if kwargs.get('nodata') and self.RasterCount == 1:
             # NoDataを強調して表示
             nodata_ary = np.where(np.isnan(img), 255, 0)
             ax.imshow(nodata_ary, cmap='bwr', extent=extent)
@@ -1270,13 +1661,3 @@ class CustomGdalDataset:
             shrink = kwargs.get('shrink', 0.8)
             fig.colorbar(cb, shrink=shrink)
 
-
-
-if __name__ == '__main__':
-    from shapely.plotting import plot_polygon
-    file_path = r'D:/Repositories/ProcessingRaster/datasets/test/DTM__R10__EPSG6672.tif'
-
-    dst = gdal.Open(file_path)
-    dataset = CustomGdalDataset(dst)
-    in_crs = pyproj.CRS(3857).to_wkt()
-    print(dataset.reprojected_bounds(in_crs))

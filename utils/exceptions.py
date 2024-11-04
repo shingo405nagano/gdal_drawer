@@ -38,5 +38,9 @@ class CustomGdalException(object):
         msg = 'The argument must be a WKT string or a shapely.geometry object.'
         raise ValueError(msg)
     
+    def band_count_err(self) -> None:
+        msg = 'The number of bands in the dataset does not match the specified number of bands.'
+        raise ValueError(msg)
+    
 custom_gdal_exception = CustomGdalException()
 

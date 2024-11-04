@@ -217,10 +217,7 @@ class GdalUtils(object):
         new_line = self.reprojection_geometry(line, in_wkt_crs, out_wkt_crs)
         metre = shapely.from_wkt(new_line).length
         return round(metre, digit)
-"""
-band_numbers = 1. None, 2. int, 3. List[int]
-1. None: すべてのバンドを読み込む
 
-2. int: 指定したバンドを読み込む
-3. List[int]: 指定したバンドを読み込む
-"""
+
+
+
