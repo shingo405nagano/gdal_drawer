@@ -1,5 +1,6 @@
 from collections.abc import Iterable
 from dataclasses import dataclass
+import inspect
 from pathlib import Path
 from typing import Callable
 from typing import Any
@@ -1228,6 +1229,7 @@ class CustomGdalDataset(object):
         poly_crs = kwargs.get('poly_crs', self.GetProjection())
         if poly_crs != self.GetProjection() and not isinstance(poly_crs, str):
             poly_crs = poly_crs.to_wkt()
+
         return gdal.WarpOptions(
             format=fmt,
             cutlineWKT=wkt_poly,
@@ -1235,7 +1237,7 @@ class CustomGdalDataset(object):
             cutlineSRS=poly_crs,
             srcSRS=self.GetProjection(),
             dstNodata=nodata,
-            srcNodata=dst.GetRasterBand(1).GetNoDataValue()
+            srcNodata=self.GetRasterBand(1).GetNoDataValue()
         )
     
     @__wkt_geometry_check(0, 'wkt_poly')
@@ -1862,9 +1864,5 @@ if __name__ == '__main__':
     file = r"D:\Repositories\ProcessingRaster\datasets\test\DTM__R10__EPSG4326.tif"
     gdal_dst = gdal_open(file)
     import os
-    dir_name = r"D:\Repositories\ProcessingRaster\datasets\test"
-    positions = ['upper_left', 'upper_right', 'lower_left', 'lower_right', 'center']
-    for pos in positions:
-        gdf = gdal_dst.to_geodataframe_xy(position=pos)
-        gdf.to_file(os.path.join(dir_name, f'{pos}.geojson'), driver='GeoJSON')
+    
     
