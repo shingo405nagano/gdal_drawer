@@ -1,6 +1,179 @@
+"""
+# Summary
+このモジュールでは、gdal.Datasetを拡張したCustomGdalDatasetクラスを定義している。
+以下のExamplesではよく使用されるメソッドを紹介しています。
+## Examples:
+--------------------------------------------------------------------------------
+## 1. ラスターデータの読み込み
+```python
+>>> file_path = r'.\sample\raster.tif'
+>>> dst = gdal_open(file_path)
+>>> type(dst)
+CustomGdalDataset
+```
+--------------------------------------------------------------------------------
+## 2. ラスターデータの配列を取得
+これは `gdal.Dataset` の `ReadAsArray` メソッドと同じですが、Float型のNoDataをnp.nanに変換しています。
+```python
+>>> ary = dst.array()
+>>> type(ary)
+numpy.ndarray
+```
+--------------------------------------------------------------------------------
+## 3. ラスターデータの保存
+```python
+>>> new_file_path = r'.\new_raster.tif'
+>>> dst.save_dst(new_file_path)
+```
+--------------------------------------------------------------------------------
+## 4. Datasetに配列を書き込み、Tiffファイルとして保存
+```python
+>>> # band数やデータ型が変わらない場合
+>>> ary = np.random.normal(0, 1, (dst.RasterYSize, dst.RasterXSize))
+>>> new_dst = dst.write_ary_to_mem(ary)
+>>> new_dst.save_dst(new_file_path)
+>>> # --------
+>>> # band数やデータ型が変わる場合
+>>> ary = np.random.randint(0, 255, (3, dst.RasterYSize, dst.RasterXSize))
+>>> new_dst = dst.write_ary_to_mem(ary, data_type=gdal.GDT_Byte, raster_count=3)
+>>> new_dst.save_dst(new_file_path)
+```
+--------------------------------------------------------------------------------
+## 5. NoDataを埋める
+```python
+>>> new_dst = dst.fill_nodata(max_search_distance=10, smoothing=10)
+```
+--------------------------------------------------------------------------------
+## 6. データの範囲を取得する
+```python
+>>> bounds = dst.bounds
+>>> pint(bounds)
+Bounds(x_min=0.0, y_min=0.0, x_max=100.0, y_max=100.0)
+```
+--------------------------------------------------------------------------------
+## 7. 投影変換したデータの範囲を取得する
+```python
+>>> bounds = dst.reprojected_bounds(4326)
+>>> print(bounds)
+Bounds(x_min=0.0, y_min=0.0, x_max=100.0, y_max=100.0)
+```
+--------------------------------------------------------------------------------
+## 8. 各セルの座標を取得する
+```python
+>>> center_ary = dst.cells_center_coordinates()
+>>> center_ary
+Coordinates(X=np.array([[0.5, 1.5, 2.5, ..., 97.5, 98.5, 99.5],
+                         [0.5, 1.5, 2.5, ..., 97.5, 98.5, 99.5],
+                         ...,
+                         [0.5, 1.5, 2.5, ..., 97.5, 98.5, 99.5],
+                         [0.5, 1.5, 2.5, ..., 97.5, 98.5, 99.5]]),
+            Y=np.array([[0.5, 0.5, 0.5, ..., 0.5, 0.5, 0.5],
+                         [1.5, 1.5, 1.5, ..., 1.5, 1.5, 1.5],
+                         ...,
+                         [97.5, 97.5, 97.5, ..., 97.5, 97.5, 97.5],
+                         [98.5, 98.5, 98.5, ..., 98.5, 98.5, 98.5]]))
+>>> upper_left_ary = dst.cells_upper_left_coordinates()
+>>> upper_right_ary = dst.cells_upper_right_coordinates()
+>>> lower_left_ary = dst.cells_lower_left_coordinates()
+>>> lower_right_ary = dst.cells_lower_right_coordinates()
+```
+--------------------------------------------------------------------------------
+## 9. 各セルの情報と座標をgeopandas.GeoDataFrameで取得する。
+```python
+>>> gdf = dst.to_geodataframe_xy(position='center')
+```
+これはpandas.DataFrameを返すメソッドもあります。DataFrameの場合は'geometry'が Wkt形式で返されます。
+```python
+>>> df = dst.to_dataframe_xy(position='center')
+```
+--------------------------------------------------------------------------------
+## 10. データセットの投影変換
+```python
+>>> dst = gdal.Open(r'.\sample\raster.tif') # EPSG: 4326
+>>> out_crs = pyproj.CRS('EPSG:6678')
+>>> new_dst = dst.reprojected_dataset(out_crs)
+```
+UTMを推定して投影変換する場合は以下のようにします。
+```python
+>>> new_dst = dst.estimate_utm_and_reprojected_dataset('JGD2011')
+```
+--------------------------------------------------------------------------------
+## 11. リサンプリング
+EPSG4326のデータセットであっても、何も指定しなければUTMを推定し、引数はメートル単位だと解釈してリサンプリングを行います。
+```python
+>>> new_dst = dst.resample_with_resol_spec(5, 5)
+```
+Degree単位でリサンプリングする場合は以下のようにします。
+```python
+>>> new_dst = dst.resample_with_resol_spec(0.0001, 0.0001, forced_metre_system=False)
+``` 
+セル数でリサンプリングする場合は以下のようにします。これはもとのデータセットの範囲を確認してから行う様にしてください。
+```python
+>>> new_dst = dst.resample_with_cells_spec(100, 100)
+``` 
+--------------------------------------------------------------------------------
+## 12. データセットのクリップ
+Polygonでクリップする場合は以下のようにします。
+```python
+>>> polygon = 'POLYGON((0 0, 0 100, 100 100, 100 0, 0 0))'
+>>> new_dst = dst.clip_with_polygon(polygon)
+``` 
+BoundingBoxでクリップする場合は以下のようにします。
+```python
+>>> new_dst = dst.clip_with_bounds(polygon)
+```
+--------------------------------------------------------------------------------
+## 13. データセットのマスク処理
+このメソッドは、Geometryの投影法が異なる場合にも使用できる。
+```python
+>>> polygon = 'POLYGON((0 0, 0 100, 100 100, 100 0, 0 0))'
+>>> in_wkt_crs = pyproj.CRS('EPSG:4326')
+>>> new_dst = dst.get_masked_array(polygon, in_wkt_crs, masked_value=np.nan,
+                                   out_shape=(100, 100), all_touched=True,
+                                   inverse=False)
+```
+--------------------------------------------------------------------------------
+## 14. gdal.DEMProcessingを使用した処理
+陰影起伏図を作成する場合は以下のようにします。
+```python
+>>> new_dst = dst.hillshade(altitude=90, z_factor=2)
+``` 
+傾斜図を作成する場合は以下のようにします。
+```python
+>>> new_dst = dst.slope()
+```
+TPIを作成しRGBAのラスターとして保存する場合は以下のようにします。
+```python
+>>> from utils.colors import CustomCmap
+>>> kernel = dst.inverse_gaussian_kernel_from_distance(15)
+>>> tpi_ary = dst.TPI(kernel=kernel, return_ary=True)
+>>> custom_cmap = CustomCmap()
+>>> cmap = custom_cmap.color_list_to_linear_cmap([
+...         [0.0, 0.0, 0.8039, 0.6],
+...         [0.0039, 0.8353, 1.0, 0.5],
+...         [0.5176, 0.0039, 1.0, 0.1],
+...         [1.0, 1.0, 1.0, 0.0],
+...         [0.9725, 0.3882, 0.0, 0.25],
+...         [1.0, 0.1882, 0.0039, 0.5],
+...         [1.0, 0.0, 0.0, 0.6]
+...      ])
+>>> img = cmap.values_to_img(tpi_ary, 'inta')
+>>> raster_ary = np.array([img[:, :, i] for i in range(img.shape[2])])
+>>> new_dst = dst.write_ary_to_mem(raster_ary, data_type=gdal.GDT_Int16, nodata=256, raster_count=4)
+>>> new_dst.save_dst(new_file_path)
+--------------------------------------------------------------------------------
+## 15. データセットの可視化
+Rasterの可視化を行う場合は以下のようにします。
+```python
+>>> fig, ax = plt.subplots()
+>>> dst.plot_raster(fig, ax)
+>>> plt.show()
+```
+
+"""
+
 from collections.abc import Iterable
 from dataclasses import dataclass
-import inspect
 from pathlib import Path
 from typing import Callable
 from typing import Any
@@ -270,7 +443,12 @@ class CustomGdalDataset(object):
             return self._get_selected_arys(band_numbers)
         else:
             custom_gdal_exception.get_band_err()
-        
+
+    def array_of_image(self) -> Union[gdal.Band, List[gdal.Band]]:
+        if self.RasterCount < 3:
+            raise ValueError('The number of bands is less than 3.')
+        return np.dstack(self.array())
+
     def _get_all_ary(self) -> np.ndarray:
         """
         ## Summary
@@ -404,6 +582,7 @@ class CustomGdalDataset(object):
             >>> dst.save_dst(new_file_path)
         """
         driver = gdal.GetDriverByName(fmt)
+        driver.Register()
         _dst = driver.CreateCopy(file_path, self.dataset)
         _dst.FlushCache()
         _dst = None
@@ -472,6 +651,7 @@ class CustomGdalDataset(object):
         ary = self._nodata_to(ary, band.GetNoDataValue(), out_nodata)
         band.WriteArray(ary)
         band.SetNoDataValue(out_nodata)
+        band.SetColorInterpretation(gdal.GCI_GrayIndex)
         return CustomGdalDataset(new_dst)
 
     def _multi_band_to_mem(self,
@@ -500,10 +680,11 @@ class CustomGdalDataset(object):
         """
         # メモリ上に新しいラスターデータを作成する
         new_dst = self.__create_dataset(data_type, **kwargs)
-        for i in range(self.RasterCount):
+        for i in range(kwargs.get('count', self.RasterCount)):
             band = new_dst.GetRasterBand(i+1)
             band.WriteArray(ary[i])
             band.SetNoDataValue(out_nodata)
+            band.SetColorInterpretation(self.__rgba_color_interpretation(i))
         return CustomGdalDataset(new_dst)
     
     def _nodata_to(self, 
@@ -543,6 +724,15 @@ class CustomGdalDataset(object):
         dst.SetGeoTransform(kwargs.get('transform', self.GetGeoTransform()))
         dst.SetProjection(kwargs.get('projection', self.GetProjection()))
         return dst
+    
+    def __rgba_color_interpretation(self, idx: int) -> Generator:
+        color_interpretations = [
+            gdal.GCI_RedBand,
+            gdal.GCI_GreenBand,
+            gdal.GCI_BlueBand,
+            gdal.GCI_AlphaBand
+        ]
+        return color_interpretations[idx]
 
     def fill_nodata(self, 
         max_search_distance: int, 
@@ -1148,11 +1338,12 @@ class CustomGdalDataset(object):
                 補間方法.\n 
                 Defaults to gdal.GRA_CubicSpline. \n
                 [gdal.GRA_NearestNeighbour, gdal.GRA_Bilinear, gdal.GRA_Cubic, gdal.GRA_CubicSpline, gdal.GRA_Lanczos]
-            forced_metre_system(bool): 
-                Degree単位のデータセットもメートル単位で指定するかどうか.\n 
-                Defaults to True.\n
-                Trueの場合は、メートル単位で指定した解像度をDegree単位に変換した後でリサンプリングを行う。
-            datum_name(str): 'WGS 84', 'JGD2011' など. Defaults to 'JGD2011'
+            **kwargs:
+                forced_metre_system(bool): 
+                    Degree単位のデータセットもメートル単位で指定するかどうか.\n 
+                    Defaults to True.\n
+                    Trueの場合は、メートル単位で指定した解像度をDegree単位に変換した後でリサンプリングを行う。
+                datum_name(str): 'WGS 84', 'JGD2011' など. Defaults to 'JGD2011'
         Returns:
             CustomGdalDataset(gdal.Dataset): リサンプリング後のラスターデータ
         Examples:
@@ -1792,9 +1983,6 @@ class CustomGdalDataset(object):
         kernel_size = kernels.distance_to_kernel_size(distance, x_resol, y_resol)
         return kernels.inverse_gaussian_kernel_from_size(kernel_size.x, kernel_size.y, coef)
     
-    ############################################################################
-    # ----------------- Methods for set colormap to 2D-Array. -----------------
-
     #############################################################################
     # ----------------- Methods for plotting. -----------------
     def plot_raster(self, 
@@ -1860,9 +2048,3 @@ def gdal_open(file_path: Path) -> CustomGdalDataset:
     return new_dst
 
 
-if __name__ == '__main__':
-    file = r"D:\Repositories\ProcessingRaster\datasets\test\DTM__R10__EPSG4326.tif"
-    gdal_dst = gdal_open(file)
-    import os
-    
-    

@@ -1,5 +1,58 @@
 """
 Do not use doctest.
+
+このモジュールでは、matplotlibのカラーマップを拡張するためのクラスを提供しています。
+
+# Example
+-------------------------------------------------------------------------------
+## 連続値を使用したカスタムColorMapの作成
+これは`matplotlib.colors.LinearSegmentedColormap`の拡張クラスを返す。
+```python
+>>> colors = ['red', 'green', 'blue']
+>>> custom_cmap = CustomCmap()
+>>> cmap = custom_cmap.color_list_to_linear_cmap(colors)
+>>> type(cmap)
+<class '__main__.LinearColorMap'>
+```
+-------------------------------------------------------------------------------
+## 作成したカスタムColorMapからIndexを指定して色を取得する
+```python
+>>> # Indexの色を取得する
+>>> cmap.get(0)
+(1.0, 0.0, 0.0)
+>>> # rgbaの色を取得する
+>>> cmap.get(0, 'rgba')
+(1.0, 0.0, 0.0, 1.0)
+>>> # Hexの色を取得する
+>>> cmap.get(0, 'hex')
+'#ff0000'
+>>> # intの色を取得する
+>>> cmap.get(0, 'int')
+(255, 0, 0)
+>>> # intaの色を取得する
+>>> cmap.get(0, 'inta')
+(255, 0, 0, 255)
+>>> # Index配列で色を取得する。2次元でも可
+>>> idx = [0, 128, 255]
+>>> cmap.get(idx, 'rgba')
+[(1.0, 0.0, 0.0, 1.0), (0.0, 0.5019607843137255, 0.0, 1.0), (0.0, 0.0, 1.0, 1.0)]
+```
+-------------------------------------------------------------------------------
+## カスタムColorMapに登録された色を全て取得する
+```python
+>>> rgba_list = cmap.get_registered_color('rgba')
+[(1.0, 0.0, 0.0, 1.0), (0.0, 0.5019607843137255, 0.0, 1.0), ...]
+>>> len(rgba_list)
+256
+```
+-------------------------------------------------------------------------------
+## 連続値の配列からRGB画像を作成する
+```python
+>>> values = np.random.normal(0, 1, 100).reshape(10, 10)
+>>> img = cmap.values_to_img(values, 'inta')
+>>> plt.imshow(img)
+>>> plt.show()
+```
 """
 from typing import Any
 from typing import Callable
@@ -34,9 +87,9 @@ class CustomCmap(object):
                 converted_colors = []
                 for color in colors:
                     if isinstance(color, int):
-                        converted_colors.append(self.__int_to_rgba(color))
+                        converted_colors.append(color / 255)
                     elif isinstance(color, str):
-                        converted_colors.append(self.__str_to_rgba(color))
+                        converted_colors.append(to_rgba(color))
                     elif isinstance(color, float):
                         converted_colors.append(color)
                     else:
@@ -50,12 +103,6 @@ class CustomCmap(object):
                     return func(self, *args, **kwargs)
             return wrapper
         return decorator
-    
-    def __int_to_rgba(self, color: int) -> str:
-        return color / 255
-    
-    def __str_to_rgba(self, color: str) -> str:
-        return to_rgba(color)
     
     @staticmethod
     def __round_values(digits: int):
@@ -121,8 +168,7 @@ class CustomCmap(object):
         except:
             pass
         try:
-            # Listの中身がintであるかどうかをチェック
-            colors = [self.__int_to_rgba(color) for color in colors]
+            colors = [color / 255 for color in colors]
             return colors
         except:
             raise ValueError("Invalid color type. Please check the type of 'colors' in arguments.")
@@ -316,7 +362,7 @@ class LinearColorMap(object):
     ) -> List[Tuple[float]]:
         """
         ## Summary
-            カラーマップの登録された色をListで取得する。
+            cmapに登録された色をListで全て取得する。cmapには256個の色が格納されている。
         Args:
             return_type (str): The type of the return value. Can be 'rgb' or 'rgba' or 'hex' or 'int' or 'inta'
         Returns:
@@ -392,14 +438,14 @@ class LinearColorMap(object):
 
     def values_to_img(self, 
         values: Iterable[Iterable[float]], 
-        return_type: str='rgba'
+        return_type: str='inta'
     ) -> np.ndarray:
         """
         ## Summary
             連続値の配列からRGB画像を作成する。
         Args:
             values (Iterable[Iterable[float]]): 連続値の配列
-            return_type (str): The type of the return value. Can be 'rgb' or 'rgba'
+            return_type (str): The type of the return value. Can be 'rgb' or 'rgba' or 'int' or 'inta'
         Returns:
             np.ndarray: RGB画像
         Examples:
@@ -417,8 +463,11 @@ class LinearColorMap(object):
             >>> plt.imshow(img)
             >>> plt.show()
         """
+        pattern = ['rgb', 'rgba', 'int', 'inta']
+        return_type = return_type.lower()
+        if return_type not in pattern:
+            # return_type must be one of pattern
+            raise ValueError(f'return_type must be one of {pattern}')
         indices = self.generate_idx_for_retrieval(values)
-        if not return_type.lower() == 'rgb':
-            return_type = 'rgba'
         colors = np.array(self.get_registered_color(return_type))
         return colors[indices]
