@@ -1,176 +1,4 @@
-"""
-# Summary
-このモジュールでは、gdal.Datasetを拡張したCustomGdalDatasetクラスを定義している。
-以下のExamplesではよく使用されるメソッドを紹介しています。
-## Examples:
---------------------------------------------------------------------------------
-## 1. ラスターデータの読み込み
-```python
->>> file_path = r'.\sample\raster.tif'
->>> dst = gdal_open(file_path)
->>> type(dst)
-CustomGdalDataset
-```
---------------------------------------------------------------------------------
-## 2. ラスターデータの配列を取得
-これは `gdal.Dataset` の `ReadAsArray` メソッドと同じですが、Float型のNoDataをnp.nanに変換しています。
-```python
->>> ary = dst.array()
->>> type(ary)
-numpy.ndarray
-```
---------------------------------------------------------------------------------
-## 3. ラスターデータの保存
-```python
->>> new_file_path = r'.\new_raster.tif'
->>> dst.save_dst(new_file_path)
-```
---------------------------------------------------------------------------------
-## 4. Datasetに配列を書き込み、Tiffファイルとして保存
-```python
->>> # band数やデータ型が変わらない場合
->>> ary = np.random.normal(0, 1, (dst.RasterYSize, dst.RasterXSize))
->>> new_dst = dst.write_ary_to_mem(ary)
->>> new_dst.save_dst(new_file_path)
->>> # --------
->>> # band数やデータ型が変わる場合
->>> ary = np.random.randint(0, 255, (3, dst.RasterYSize, dst.RasterXSize))
->>> new_dst = dst.write_ary_to_mem(ary, data_type=gdal.GDT_Byte, raster_count=3)
->>> new_dst.save_dst(new_file_path)
-```
---------------------------------------------------------------------------------
-## 5. NoDataを埋める
-```python
->>> new_dst = dst.fill_nodata(max_search_distance=10, smoothing=10)
-```
---------------------------------------------------------------------------------
-## 6. データの範囲を取得する
-```python
->>> bounds = dst.bounds
->>> pint(bounds)
-Bounds(x_min=0.0, y_min=0.0, x_max=100.0, y_max=100.0)
-```
---------------------------------------------------------------------------------
-## 7. 投影変換したデータの範囲を取得する
-```python
->>> bounds = dst.reprojected_bounds(4326)
->>> print(bounds)
-Bounds(x_min=0.0, y_min=0.0, x_max=100.0, y_max=100.0)
-```
---------------------------------------------------------------------------------
-## 8. 各セルの座標を取得する
-```python
->>> center_ary = dst.cells_center_coordinates()
->>> center_ary
-Coordinates(X=np.array([[0.5, 1.5, 2.5, ..., 97.5, 98.5, 99.5],
-                         [0.5, 1.5, 2.5, ..., 97.5, 98.5, 99.5],
-                         ...,
-                         [0.5, 1.5, 2.5, ..., 97.5, 98.5, 99.5],
-                         [0.5, 1.5, 2.5, ..., 97.5, 98.5, 99.5]]),
-            Y=np.array([[0.5, 0.5, 0.5, ..., 0.5, 0.5, 0.5],
-                         [1.5, 1.5, 1.5, ..., 1.5, 1.5, 1.5],
-                         ...,
-                         [97.5, 97.5, 97.5, ..., 97.5, 97.5, 97.5],
-                         [98.5, 98.5, 98.5, ..., 98.5, 98.5, 98.5]]))
->>> upper_left_ary = dst.cells_upper_left_coordinates()
->>> upper_right_ary = dst.cells_upper_right_coordinates()
->>> lower_left_ary = dst.cells_lower_left_coordinates()
->>> lower_right_ary = dst.cells_lower_right_coordinates()
-```
---------------------------------------------------------------------------------
-## 9. 各セルの情報と座標をgeopandas.GeoDataFrameで取得する。
-```python
->>> gdf = dst.to_geodataframe_xy(position='center')
-```
-これはpandas.DataFrameを返すメソッドもあります。DataFrameの場合は'geometry'が Wkt形式で返されます。
-```python
->>> df = dst.to_dataframe_xy(position='center')
-```
---------------------------------------------------------------------------------
-## 10. データセットの投影変換
-```python
->>> dst = gdal.Open(r'.\sample\raster.tif') # EPSG: 4326
->>> out_crs = pyproj.CRS('EPSG:6678')
->>> new_dst = dst.reprojected_dataset(out_crs)
-```
-UTMを推定して投影変換する場合は以下のようにします。
-```python
->>> new_dst = dst.estimate_utm_and_reprojected_dataset('JGD2011')
-```
---------------------------------------------------------------------------------
-## 11. リサンプリング
-EPSG4326のデータセットであっても、何も指定しなければUTMを推定し、引数はメートル単位だと解釈してリサンプリングを行います。
-```python
->>> new_dst = dst.resample_with_resol_spec(5, 5)
-```
-Degree単位でリサンプリングする場合は以下のようにします。
-```python
->>> new_dst = dst.resample_with_resol_spec(0.0001, 0.0001, forced_metre_system=False)
-``` 
-セル数でリサンプリングする場合は以下のようにします。これはもとのデータセットの範囲を確認してから行う様にしてください。
-```python
->>> new_dst = dst.resample_with_cells_spec(100, 100)
-``` 
---------------------------------------------------------------------------------
-## 12. データセットのクリップ
-Polygonでクリップする場合は以下のようにします。
-```python
->>> polygon = 'POLYGON((0 0, 0 100, 100 100, 100 0, 0 0))'
->>> new_dst = dst.clip_with_polygon(polygon)
-``` 
-BoundingBoxでクリップする場合は以下のようにします。
-```python
->>> new_dst = dst.clip_with_bounds(polygon)
-```
---------------------------------------------------------------------------------
-## 13. データセットのマスク処理
-このメソッドは、Geometryの投影法が異なる場合にも使用できる。
-```python
->>> polygon = 'POLYGON((0 0, 0 100, 100 100, 100 0, 0 0))'
->>> in_wkt_crs = pyproj.CRS('EPSG:4326')
->>> new_dst = dst.get_masked_array(polygon, in_wkt_crs, masked_value=np.nan,
-                                   out_shape=(100, 100), all_touched=True,
-                                   inverse=False)
-```
---------------------------------------------------------------------------------
-## 14. gdal.DEMProcessingを使用した処理
-陰影起伏図を作成する場合は以下のようにします。
-```python
->>> new_dst = dst.hillshade(altitude=90, z_factor=2)
-``` 
-傾斜図を作成する場合は以下のようにします。
-```python
->>> new_dst = dst.slope()
-```
-TPIを作成しRGBAのラスターとして保存する場合は以下のようにします。
-```python
->>> from utils.colors import CustomCmap
->>> kernel = dst.inverse_gaussian_kernel_from_distance(15)
->>> tpi_ary = dst.TPI(kernel=kernel, return_ary=True)
->>> custom_cmap = CustomCmap()
->>> cmap = custom_cmap.color_list_to_linear_cmap([
-...         [0.0, 0.0, 0.8039, 0.6],
-...         [0.0039, 0.8353, 1.0, 0.5],
-...         [0.5176, 0.0039, 1.0, 0.1],
-...         [1.0, 1.0, 1.0, 0.0],
-...         [0.9725, 0.3882, 0.0, 0.25],
-...         [1.0, 0.1882, 0.0039, 0.5],
-...         [1.0, 0.0, 0.0, 0.6]
-...      ])
->>> img = cmap.values_to_img(tpi_ary, 'inta')
->>> raster_ary = np.array([img[:, :, i] for i in range(img.shape[2])])
->>> new_dst = dst.write_ary_to_mem(raster_ary, data_type=gdal.GDT_Int16, nodata=256, raster_count=4)
->>> new_dst.save_dst(new_file_path)
---------------------------------------------------------------------------------
-## 15. データセットの可視化
-Rasterの可視化を行う場合は以下のようにします。
-```python
->>> fig, ax = plt.subplots()
->>> dst.plot_raster(fig, ax)
->>> plt.show()
-```
-
-"""
+# Description: This file is a custom module for raster data processing.
 
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -1611,50 +1439,91 @@ class CustomGdalDataset(object):
 
     ############################################################################
     # ----------------- Statistical methods for dataset. -----------------
-    def normalized_array(self) -> np.ndarray:
+    def normalized_array(self, **kwargs) -> np.ndarray:
         """
         ## Summary
-            ラスターデータを正規化する
+            ラスターデータを正規化する。'raster_ary'が指定されていない場合は、自身のラスターデータを使用する。
+        Args:
+            kwargs:
+                raster_ary(np.ndarray): ラスターデータの配列
         Returns:
             np.ndarray: 正規化後のラスターデータ
         """
-        ary = self.ReadAsArray()
-        min_ = np.nanmin(ary)
-        max_ = np.nanmax(ary)
-        return (ary - min_) / (max_ - min_)
+        def normalize(ary: np.ndarray) -> np.ndarray:
+            min_ = np.nanmin(ary)
+            max_ = np.nanmax(ary)
+            return (ary - min_) / (max_ - min_)
+        
+        raster_ary = kwargs.get('raster_ary', self.array())
+        if len(raster_ary.shape) <= 2:
+            return normalize(raster_ary)
+        else:
+            new_arys = []
+            for ary in raster_ary:
+                new_arys.append(normalize(ary))
+            return np.array(new_arys)
     
-    def outlier_treatment_array_by_std(self, sigma: float=2) -> np.ndarray:
+    def outlier_treatment_array_by_std(self, 
+        sigma: float=2, 
+        **kwargs
+    ) -> np.ndarray:
         """
         ## Summary
-            ラスターデータの外れ値を標準偏差で処理する
+            ラスターデータの外れ値を標準偏差で処理する。'raster_ary'が指定されていない場合は、自身のラスターデータを使用する。
         Args:
             threshold(float, optional): 標準偏差の倍数. Defaults to 2.
+            **kwargs:
+                - raster_ary(np.ndarray): ラスターデータの配列
         Returns:
             np.ndarray: 外れ値処理後のラスターデータ
         """
-        ary = self.ReadAsArray()
-        mean = np.nanmean(ary)
-        std = np.nanstd(ary)
-        upper = mean + sigma * std
-        lower = mean - sigma * std
-        return np.where(upper < ary, upper, np.where(ary < lower, lower, ary))
+        def outlier_treatment(ary: np.ndarray) -> np.ndarray:
+            mean = np.nanmean(ary)
+            std = np.nanstd(ary)
+            upper = mean + sigma * std
+            lower = mean - sigma * std
+            return np.where(upper < ary, upper, np.where(ary < lower, lower, ary))
+        
+        raster_ary = kwargs.get('raster_ary', self.array())
+        if len(raster_ary.shape) <= 2:
+            return outlier_treatment(raster_ary)
+        else:
+            new_arys = []
+            for ary in raster_ary:
+                new_arys.append(outlier_treatment(ary))
+            return np.array(new_arys)
     
-    def outlier_treatment_array_by_quantile(self, threshold: float=1.5) -> np.ndarray:
+    def outlier_treatment_array_by_iqr(self, 
+        threshold: float=1.5, 
+        **kwargs
+    ) -> np.ndarray:
         """
         ## Summary
             ラスターデータの外れ値を四分位範囲で処理する
         Args:
             threshold(float, optional): 四分位範囲の倍数. Defaults to 1.5.
+            **kwargs:
+                - raster_ary(np.ndarray): ラスターデータの配列
         Returns:
             np.ndarray: 外れ値処理後のラスターデータ
         """
-        ary = self.ReadAsArray()
-        q1 = np.nanpercentile(ary, 25)
-        q3 = np.nanpercentile(ary, 75)
-        iqr = q3 - q1
-        upper = q3 + threshold * iqr
-        lower = q1 - threshold * iqr
-        return np.where(upper < ary, upper, np.where(ary < lower, lower, ary))
+        def outlier_treatment(ary: np.ndarray):
+            q1 = np.nanpercentile(ary, 25)
+            q3 = np.nanpercentile(ary, 75)
+            iqr = q3 - q1
+            upper = q3 + threshold * iqr
+            lower = q1 - threshold * iqr
+            return np.where(upper < ary, upper, np.where(ary < lower, lower, ary))
+        
+        raster_ary = kwargs.get('raster_ary', self.array())
+        if len(raster_ary.shape) <= 2:
+            return outlier_treatment(raster_ary)
+        else:
+            new_arys = []
+            for ary in raster_ary:
+                new_arys.append(outlier_treatment(ary))
+            return np.array(new_arys)
+
 
     ############################################################################
     # ----------------- DEM processing methods for dathaset. -----------------
