@@ -137,6 +137,20 @@ EPSG:4326のRasterDataをDegree単位でリサンプリングする場合は以�
 9.1289
 ```
 
+### 2-11. セルサイズをメートル単位で取得する
+```python
+>>> cell_length = dst.cell_size_in_metre(digit=4)
+>>> cell_length
+CellSize(x_size=0.5, y_size=-0.5)
+```
+
+### 2-12. セルサイズを度単位で取得する
+```python
+>>> cell_length = dst.cell_size_in_degree(digit=9)
+>>> cell_length
+CellSize(x_size=5.3402e-06, y_size=4.546e-06)
+```
+
 <br>
 
 ## **3. Examples of Clip and Mask:**
@@ -185,29 +199,57 @@ no_dataを埋める場合は以下のようにします。
 >>> new_dst = dst.hillshade(azimuth=315, altitude=90, z_factor=2)
 ``` 
 
-### 4-2. 傾斜図の作成
+### 4-2. 傾斜図の作成（gdal.DEMProcessing）
 ```python
 >>> new_dst = dst.slope()
 ```
 
-### 4-3. 方位図の作成
+### 4-3. 距離を指定して傾斜図を作成
+`gdal.DEMProcessing`では隣接セルを使用して勾配を計算しますが、分解能の高いDTMを使用する場合は隣接セルではなく、離れた場所との勾配を計算した方がいい場合もあります。
+```python
+>>> slope_dst = dst.slope_with_distance_spec(distance=10)
+```
+DatasetがDegreeでもMetreで指定したい場合は'distance'をメートルで指定し、xyそれぞれのセルサイズを指定する事で可能になります。
+```python
+>>> cell_size = dst.cell_size_in_metre()
+>>> slope_dst = dst.slope_with_distance_spec(
+...         distance=10, x_resolution=cell_size.x_size, 
+...         y_resolution=cell_size.y_size
+...         )
+```
+
+### 4-4. セル数を指定して傾斜図を作成
+```python
+>>> slope_dst = dst.slope_with_cells_spec(x_cells=20, y_cells=20)
+```
+DatasetがDegreeでもMetreで指定したい場合は'distance'をメートルで指定し、xyそれぞれのセルサイズを指定する事で可能になります。
+```python
+>>> cell_size = dst.cell_size_in_metre()
+>>> slope_dst = dst.slope_with_cells_spec(
+...         x_cells=20, y_cells=20, 
+...         x_resolution=cell_size.x_size, y_resolution=cell_size.y_size
+...         )
+```
+
+
+### 4-5. 方位図の作成
 ```python
 >>> new_dst = dst.aspect()
 ```
 
-### 4-4. TRIの作成
+### 4-6. TRIの作成
 ```python
 >>> new_dst = dst.TRI()
 ```
 
-### 4-5. TPIの作成
+### 4-7. TPIの作成
 ```python
 >>> # 15mの距離で逆ガウシアンカーネルを作成
 >>> kernel = dst.inverse_gaussian_kernel_from_distance(15)
 >>> new_dst = dst.TPI(kernel=kernel, outlier_treatment=2.5)
 ```
 
-### 4-6. TPIの作成（RGBAのラスターとして保存）
+### 4-8. TPIの作成（RGBAのラスターとして保存）
 ```python
 >>> # 10mのドーナツカーネルを作成
 >>> kernel = dst.doughnut_kernel(10)

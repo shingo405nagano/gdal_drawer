@@ -1,5 +1,3 @@
-# Description: This file is a custom module for raster data processing.
-
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -1578,7 +1576,7 @@ class CustomGdalDataset(object):
         return CustomGdalDataset(new_dst)
 
     @__band_check(count=1)
-    def slope(self, **kwargs) -> Union['CustomGdalDataset', gdal.Dataset]:
+    def slope_original(self, **kwargs) -> Union['CustomGdalDataset', gdal.Dataset]:
         """
         ## Summary
             勾配を計算する。このメソッドは、DEM（DTM)の処理に使用される。
@@ -1621,6 +1619,93 @@ class CustomGdalDataset(object):
             new_dst = None
             return slope_ary
         return CustomGdalDataset(new_dst)
+
+    @__band_check(count=1)
+    def slope_with_distance_spec(self, distance: float, **kwargs
+    ) -> Union['CustomGdalDataset', gdal.Dataset]:
+        """
+        ## Summary
+            距離を指定して勾配を計算する。このメソッドは、DEM（DTM)の処理に使用される。
+        Args:
+            distance(float): 勾配を計算する距離
+            **kwargs:
+                - x_resolution(float): X方向の解像度
+                - y_resolution(float): Y方向の解像度
+        Returns:
+            CustomGdalDataset(gdal.Dataset): 勾配の`gdal.Dataset`.
+        """
+        x_cell_size = kwargs.get('x_cell_size', self.x_resolution)
+        y_cell_size = kwargs.get('y_cell_size', self.y_resolution)
+        # 距離からセル数を計算
+        kernel_size = \
+            kernels.distance_to_kernel_size(distance, x_cell_size, y_cell_size)
+        x_cells = kernel_size.x
+        y_cells = kernel_size.y
+        # データを広げて端まで計算できるようにする
+        dst = self.expansion_dst(y_cells, x_cells)
+        dtm = dst.array()
+        dst = None
+        slope_ary = self.__calc_slope(dtm, x_cells, y_cells, x_cell_size, y_cell_size)
+        return self.write_ary_to_mem(slope_ary)
+    
+    @__band_check(count=1)
+    def slope_with_cells_spec(self, 
+        x_cells: int, 
+        y_cells: int, 
+        **kwargs
+    ) -> Union['CustomGdalDataset', gdal.Dataset]:
+        """
+        セル数を指定して勾配を計算する
+        Args:
+            x_cells(int): X方向のセル数
+            y_cells(int): Y方向のセル数
+            **kwargs:
+                x_resol(float): X方向の解像度
+                y_resol(float): Y方向の解像度
+        Returns:
+            CustomGdalDataset(gdal.Dataset): 勾配の`gdal.Dataset`.
+        """
+        x_resol = kwargs.get('x_resol', self.x_resolution)
+        y_resol = kwargs.get('y_resol', self.y_resolution)
+        # データを広げて端まで計算できるようにする
+        dst = self.expansion_dst(y_cells, x_cells)
+        dtm = dst.array()
+        dst = None
+        slope_ary = self.__calc_slope(dtm, x_cells, y_cells, x_resol, y_resol)
+        return self.write_ary_to_mem(slope_ary)
+
+    def __calc_slope(self, 
+        dtm: np.ndarray, 
+        x_cells: int, 
+        y_cells: int, 
+        x_resol: float, 
+        y_resol: float
+    ) -> np.ndarray:
+        """傾斜計算"""
+        # 垂直方向の勾配を計算
+        # 北向きの勾配を計算。これは下に配置
+        north_direc = dtm[: -y_cells] - dtm[y_cells:]
+        # 南向きの勾配を計算。これは上に配置
+        south_direc = dtm[y_cells:] - dtm[: -y_cells]
+        space = np.full(dtm[: y_cells].shape, np.nan)
+        y_center = north_direc[: -y_cells] - south_direc[y_cells:]
+        # 上下のセルをnanで埋める
+        y_slope = np.concatenate([space, y_center, space], axis=0)
+        y_slope = (y_slope / (2 * y_cells * abs(y_resol))) ** 2
+        # 水平方向の勾配を計算
+        # 東向きの勾配を計算。これは左に配置
+        east_direc = dtm[:, : -x_cells] - dtm[:, x_cells:]
+        # 西向きの勾配を計算。これは右に配置
+        west_direc = dtm[:, x_cells:] - dtm[:, : -x_cells]
+        space = np.full(dtm[:, : x_cells].shape, np.nan)
+        x_center = east_direc[:, : -x_cells] - west_direc[:, x_cells:]
+        # 左右のセルをnanで埋める
+        x_slope = np.concatenate([space, x_center, space], axis=1)
+        x_slope = (x_slope / (2 * x_cells * abs(x_resol))) ** 2
+        # 勾配を計算
+        slope_ary = (360 / (2 * np.pi)) * np.arctan(np.sqrt(y_slope + x_slope))
+        slope_ary = slope_ary[y_cells: -y_cells, x_cells: -x_cells]
+        return slope_ary
 
     @__band_check(count=1)
     def aspect(self, 

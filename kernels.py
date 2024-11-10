@@ -215,33 +215,43 @@ class Kernels(object):
             cmap_name(str): カラーマップの名前
             kwargs:
                 - unit_length(float): セルの大きさ（距離）
+                - is_marker(bool): markerにするかどうか。デフォルトはFalse
         """
+        # X, Y軸のインデックスを生成
         _X = self.__generate_index(kernel[0, :])
         _Y = self.__generate_index(kernel[:, 0])
         X, Y = np.meshgrid(_X, _Y)
+        # カラーマップを生成
         norm = plt.Normalize(kernel.min(), kernel.max()) 
         cmap = plt.get_cmap(cmap_name)
         colors = cmap(norm(kernel))
         fig = plt.figure()
         ax = fig.add_subplot(projection='3d')
-        ax.plot_surface(
-            X, Y, kernel,
-            facecolors=colors, 
-            edgecolor='gray', 
-            lw=0.5, 
-            rstride=1, 
-            cstride=1,
-            alpha=0.7
-        )
-        
-        # 最も高い位置に垂直線を引く 
+        if kwargs.get('is_marker', False):
+            # 散布図でプロット（douguhnutカーネルの場合は、色がおかしくなるので）
+            ax.plot_wireframe(X, Y, kernel, lw=1, ec='gray', rstride=1, cstride=1)
+            ax.scatter(X, Y, kernel, c=colors.reshape(-1, 4), marker='o', s=100)
+        else:
+            ax.plot_surface(
+                X, Y, kernel, rstride=1, cstride=1,
+                facecolors=colors, edgecolor='gray', 
+                lw=0.5,  alpha=0.7,
+                shade=False
+            )
+            Z = np.zeros_like(kernel) + kernel.min()
+            ax.plot_surface(
+                X, Y, Z, rstride=1, cstride=1, 
+                facecolors=colors, ec='gray', lw=0.5, alpha=0.7,
+                shade=False
+            )
+        # ターゲットセルの位置に垂直線を追加
         ax.plot(
             [0, 0], [0, 0], 
             [np.min(kernel), np.max(kernel)], 
             color='black', lw=10,
-            label='Target cell',
+            label='Target cell'
         )
-        # colorbarを追加
+        # ColorBarを追加
         mappable = plt.cm.ScalarMappable(cmap=cmap_name, norm=norm) 
         mappable.set_array(kernel) 
         fig.colorbar(mappable, ax=ax, shrink=0.5, aspect=5)
@@ -254,9 +264,9 @@ class Kernels(object):
             title = f"Kernel shape: {kernel.shape}"
         
         ax.set_title(title, fontsize=15, fontweight='bold')
-        ax.set_xlabel('X Cells', fontsize=14)
-        ax.set_ylabel('Y Cells', fontsize=14)
-        ax.set_zlabel('Cell values', fontsize=14)
+        ax.set_xlabel('X', fontsize=15)
+        ax.set_ylabel('Y', fontsize=15)
+        ax.set_zlabel('Weight', fontsize=15)
         ax.legend(fontsize=10, loc='upper right')
         plt.show()
         
