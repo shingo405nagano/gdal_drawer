@@ -1634,8 +1634,8 @@ class CustomGdalDataset(object):
         Returns:
             CustomGdalDataset(gdal.Dataset): 勾配の`gdal.Dataset`.
         """
-        x_cell_size = kwargs.get('x_cell_size', self.x_resolution)
-        y_cell_size = kwargs.get('y_cell_size', self.y_resolution)
+        x_cell_size = kwargs.get('x_resolution', self.x_resolution)
+        y_cell_size = kwargs.get('y_resolution', self.y_resolution)
         # 距離からセル数を計算
         kernel_size = \
             kernels.distance_to_kernel_size(distance, x_cell_size, y_cell_size)
@@ -1665,8 +1665,8 @@ class CustomGdalDataset(object):
         Returns:
             CustomGdalDataset(gdal.Dataset): 勾配の`gdal.Dataset`.
         """
-        x_resol = kwargs.get('x_resol', self.x_resolution)
-        y_resol = kwargs.get('y_resol', self.y_resolution)
+        x_resol = kwargs.get('x_resolution', self.x_resolution)
+        y_resol = kwargs.get('y_resolution', self.y_resolution)
         # データを広げて端まで計算できるようにする
         dst = self.expansion_dst(y_cells, x_cells)
         dtm = dst.array()

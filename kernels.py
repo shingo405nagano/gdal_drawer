@@ -24,8 +24,8 @@ class Kernels(object):
                     in_args = False
                 else:
                     return func(self, *args, **kwargs)
-                divid, remainder = divmod(size, 2)
-                if 0 == remainder:
+                _, remainder = divmod(size, 2)
+                if 0 != remainder:
                     size += 1
                 if in_args:
                     args = list(args)
