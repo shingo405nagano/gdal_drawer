@@ -122,19 +122,21 @@ class CustomGdalDataset(object):
         return decorator
     
     @staticmethod
-    def __check_datum(func):
+    def __check_datum(arg_index: int, arg_name: str):
         """
         ## Summary
             データムが正しく指定されているかチェックするデコレータ
         """
-        def wrapper(self, *args, **kwargs):
-            datum_name = kwargs.get('datum_name', 'JGD2011')
-            try:
-                _ = pyproj.CRS(datum_name).to_authority()
-            except pyproj.exceptions.CRSError:
-                custom_gdal_exception.unknown_datum_err()
-            return func(self, *args, **kwargs)
-        return wrapper
+        def decorator(func: Callable):
+            def warpper(self, *args, **kwargs):
+                datum_name = kwargs.get('datum_name', 'JGD2011')
+                try:
+                    _ = pyproj.CRS(datum_name).to_authority()
+                except pyproj.exceptions.CRSError:
+                    custom_gdal_exception.unknown_datum_err()
+                return func(self, *args, **kwargs)
+            return warpper
+        return decorator
 
     @staticmethod
     def __is_iterable_of_ints(arg_index: int, arg_name: str):
@@ -963,7 +965,7 @@ class CustomGdalDataset(object):
         crs = pyproj.CRS(self.GetProjection())
         return crs.axis_info[0].unit_name == 'metre'
 
-    @__check_datum
+    @__check_datum(0, 'datum_name')
     def estimate_utm_crs(self, **kwargs) -> str:
         """
         ## Summary
@@ -1097,7 +1099,7 @@ class CustomGdalDataset(object):
         Examples:
             >>> new_dst: gdal.Dataset = dst.estimate_utm_and_reprojected_dataset('JGD2011')
         """
-        out_wkt_crs = self.estimate_utm_crs(datum_name)
+        out_wkt_crs = self.estimate_utm_crs(datum_name=datum_name)
         return self.reprojected_dataset(out_wkt_crs)
 
     ############################################################################
