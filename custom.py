@@ -1795,6 +1795,7 @@ class CustomGdalDataset(object):
             rows, cols = kernel.shape
             # 畳み込み処理を端まで行うために、ラスターデータを拡張する
             _dst = self.expansion_dst(vertical=rows, horizontal=cols)
+            _dst = _dst.fill_nodata(max([rows, cols]))
             ary = _dst.array()
             conved_ary = (
                 scipy

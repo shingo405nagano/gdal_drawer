@@ -25,7 +25,7 @@ class Kernels(object):
                 else:
                     return func(self, *args, **kwargs)
                 _, remainder = divmod(size, 2)
-                if 0 != remainder:
+                if 0 == remainder:
                     size += 1
                 if in_args:
                     args = list(args)
@@ -232,17 +232,10 @@ class Kernels(object):
             ax.plot_wireframe(X, Y, kernel, lw=1, ec='gray', rstride=1, cstride=1)
             ax.scatter(X, Y, kernel, c=colors.reshape(-1, 4), marker='o', s=100)
         else:
-            ax.plot_surface(
-                X, Y, kernel, rstride=1, cstride=1,
-                facecolors=colors, edgecolor='gray', 
-                lw=0.5,  alpha=0.7,
-                shade=False
-            )
-            Z = np.zeros_like(kernel) + kernel.min()
-            ax.plot_surface(
-                X, Y, Z, rstride=1, cstride=1, 
-                facecolors=colors, ec='gray', lw=0.5, alpha=0.7,
-                shade=False
+            ax.scatter(X, Y, kernel, c=colors.reshape(-1, 4), marker='o', s=10)
+            ax.plot_trisurf(
+                X.flatten(), Y.flatten(), kernel.flatten(), norm=norm,
+                lw=0.5, alpha=0.7, cmap=cmap_name
             )
         # ターゲットセルの位置に垂直線を追加
         ax.plot(
@@ -262,7 +255,7 @@ class Kernels(object):
                     f"Distance: ({row_length}, {col_length})")
         else:
             title = f"Kernel shape: {kernel.shape}"
-        
+
         ax.set_title(title, fontsize=15, fontweight='bold')
         ax.set_xlabel('X', fontsize=15)
         ax.set_ylabel('Y', fontsize=15)
