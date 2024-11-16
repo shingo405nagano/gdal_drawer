@@ -1782,7 +1782,6 @@ class CustomGdalDataset(object):
             TPI（Topographic Position Index）を計算する。このメソッドは、DEM（DTM)の処理に使用される。
         Args:
             kwargs:
-                - alg(str): アルゴリズムの指定。Horn | ZevenbergenThorne. Defaults to 'Horn'.
                 - kernel(2D-array): 畳み込み用のカーネルを指定する。
                 - outlier_treatment(float | False): 外れ値処理の倍数. Defaults to 1.5
                 - return_array(bool): If True, return the result as a numpy array. Defaults to False.
@@ -1811,8 +1810,7 @@ class CustomGdalDataset(object):
                 'destName': '',
                 'srcDS': self.dataset,
                 'processing': 'TPI',
-                'format': 'MEM',
-                'alg': kwargs.get('alg', 'Horn')
+                'format': 'MEM'
             }
             _new_dst = gdal.DEMProcessing(**options)
             tpi_ary = _new_dst.ReadAsArray()
