@@ -21,7 +21,7 @@ from osgeo import ogr
 from osgeo import osr
 import pandas as pd
 import pyproj
-import scipy.ndimage
+import scipy.signal
 import shapely
 gdal.UseExceptions()
 
@@ -1798,8 +1798,8 @@ class CustomGdalDataset(object):
             ary = _dst.array()
             conved_ary = (
                 scipy
-                .ndimage
-                .convolve(ary, kernel, mode='constant')
+                .signal
+                .convolve(ary, kernel, mode='same', method='fft')
             )
             tpi_ary = ary - conved_ary
             # 端の部分を削除
@@ -1853,7 +1853,7 @@ class CustomGdalDataset(object):
         """
         ## Summary
             作成したい辺の長さを元に平均カーネルを作成する。
-            作成したカーネルは、`scipy.ndimage.convolve`で使用する。
+            作成したカーネルは、`scipy.signal.convolve`で使用する。
         Args:
             distance(int): カーネルの距離
             metre(bool, optional): メートル単位で指定するかどうか. Defaults to True.Falseの場合はそのままの値を使用する。
@@ -1875,7 +1875,7 @@ class CustomGdalDataset(object):
         """
         ## Summary  
             作成したい辺の長さを元にドーナツカーネルを作成する。
-            作成したカーネルは、`scipy.ndimage.convolve`で使用する。
+            作成したカーネルは、`scipy.signal.convolve`で使用する。
         Args:
             distance(float): カーネルの距離
             metre(bool, optional): メートル単位で指定するかどうか. Defaults to True.Falseの場合はそのままの値を使用する。
@@ -1898,7 +1898,7 @@ class CustomGdalDataset(object):
         """
         ## Summary
             作成したい辺の長さを元にガウシアンカーネルを作成する。
-            作成したカーネルは、`scipy.ndimage.convolve`で使用する。
+            作成したカーネルは、`scipy.signal.convolve`で使用する。
         Args:
             distance(float): カーネルの距離
             metre(bool, optional): メートル単位で指定するかどうか. Defaults to True.Falseの場合はそのままの値を使用する。
@@ -1922,7 +1922,7 @@ class CustomGdalDataset(object):
         """
         ## Summary
             作成したい辺の長さを元に逆ガウシアンカーネルを作成する。
-            作成したカーネルは、`scipy.ndimage.convolve`で使用する。
+            作成したカーネルは、`scipy.signal.convolve`で使用する。
         Args:
             distance(float): カーネルの距離
             metre(bool, optional): メートル単位で指定するかどうか. Defaults to True.Falseの場合はそのままの値を使用する。
