@@ -1796,11 +1796,19 @@ class CustomGdalDataset(object):
             _dst = self.expansion_dst(vertical=rows, horizontal=cols)
             _dst = _dst.fill_nodata(max([rows, cols]))
             ary = _dst.array()
+            nan_idx = np.isnan(ary)
+            if 1 <= nan_idx.size:
+                # np.nanが含まれている場合は一旦0を入力してしまう
+                ary[nan_idx] = 0
             conved_ary = (
                 scipy
                 .signal
                 .convolve(ary, kernel, mode='same', method='fft')
             )
+            if 1 <= nan_idx.size:
+                # np.nanが含まれていた場合は元の値に戻す
+                conved_ary[nan_idx] = np.nan
+                
             tpi_ary = ary - conved_ary
             # 端の部分を削除
             tpi_ary = tpi_ary[rows:-rows, cols:-cols]
