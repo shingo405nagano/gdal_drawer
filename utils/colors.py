@@ -458,7 +458,7 @@ class LinearColorMap(object):
         img = colors[indices]
         # NoDataのIndexを透明色に変換
         if img.shape[-1] == 4:
-            img[nodata_idxs] = [0, 0, 0, 0]
+            img[nodata_idxs] = [255, 255, 255, 0]
         else:
             img[nodata_idxs] = [255, 255, 255]
         return img
