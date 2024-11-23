@@ -1570,6 +1570,12 @@ class CustomGdalDataset(object):
                 del options['combined']
                 del options['azimuth']
         new_dst = gdal.DEMProcessing(**options)
+        band = new_dst.GetRasterBand(1)
+        nodata = band.GetNoDataValue()
+        ary = new_dst.ReadAsArray() 
+        nodata_idx = ary == nodata
+        ary[nodata_idx] = 255
+        band.WriteArray(ary)
         if return_array:
             # return_arrayが指定されている場合は、numpy配列で返す
             hillshade_ary = new_dst.ReadAsArray()
@@ -2011,3 +2017,11 @@ def gdal_open(file_path: Path) -> CustomGdalDataset:
     return new_dst
 
 
+if __name__ == '__main__':
+    from matplotlib import pyplot as plt
+    fp = r"D:\dataset\GeoTiffs\TEST_DATASETS\DTM_IwateShizukuishi__R0_5.tif"
+    dst = gdal_open(fp)
+    hillshade = dst.hillshade()
+    fig, ax = plt.subplots()
+    hillshade.plot_raster(fig, ax)
+    plt.show()
