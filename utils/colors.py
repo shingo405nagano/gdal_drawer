@@ -407,37 +407,20 @@ class LinearColorMap(object):
         values = np.where(values == in_nodata_value, np.nan, values)
         values = np.where(np.isinf(values), np.nan, values)
         # nanのIndexを取得しておく
-        _convert_indices = []
-        _convert_indices.append(np.argwhere(np.isnan(values)).tolist())
-        convert_indices = []
-        for idx in _convert_indices:
-            if not idx:
-                continue
-            elif isinstance(idx, list) and 1 < len(idx):
-                convert_indices.extend(idx)
-            else:
-                convert_indices.append(idx[0])
-
+        nan_idx = np.isnan(values)
+        # 0-255の範囲に正規化
         max_ = np.nanmax(values)
         min_ = np.nanmin(values)
-        if not convert_indices:
-            # nanがない場合はそのまま計算
-            return np.round((values - min_) / (max_ - min_) * 255).astype(int)
-        
-        # nanがある場合はnanのIndexを"out_nodata_index"に置換
-        mean = np.nanmean(values)
-        values = np.where(np.isnan(values), mean, values)
-        # nanの場合は-1に置換
+        mean_ = np.nanmean(values)
+        values[nan_idx] = mean_
         index_ary = np.round((values - min_) / (max_ - min_) * 255).astype(int)
-        for idx in convert_indices:
-            if isinstance(idx, int):
-                index_ary[idx] = out_nodata_index
-            else:
-                index_ary[idx[0]][idx[1]] = out_nodata_index
+        # nanが入力されていた場合は、out_nodata_indexに置換
+        index_ary[nan_idx] = out_nodata_index
         return index_ary
 
     def values_to_img(self, 
         values: Iterable[Iterable[float]], 
+        nodata_value: Any = -1,
         return_type: str='inta'
     ) -> np.ndarray:
         """
@@ -468,6 +451,14 @@ class LinearColorMap(object):
         if return_type not in pattern:
             # return_type must be one of pattern
             raise ValueError(f'return_type must be one of {pattern}')
+        # NoDataのIndexを取得
         indices = self.generate_idx_for_retrieval(values)
+        nodata_idxs = indices == nodata_value
         colors = np.array(self.get_registered_color(return_type))
-        return colors[indices]
+        img = colors[indices]
+        # NoDataのIndexを透明色に変換
+        if img.shape[-1] == 4:
+            img[nodata_idxs] = [0, 0, 0, 0]
+        else:
+            img[nodata_idxs] = [255, 255, 255]
+        return img
