@@ -361,6 +361,7 @@ class CustomGdalDataset(object):
         ary = np.where(ary == band.GetNoDataValue(), np.nan, ary)
         ary = np.where(np.isnan(ary), np.nan, ary)
         ary = np.where(np.isinf(ary), np.nan, ary)
+        band.WriteArray(ary)
         band.SetNoDataValue(np.nan)
         return ary
         
