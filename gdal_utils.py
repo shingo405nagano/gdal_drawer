@@ -1,20 +1,9 @@
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
-from typing import Dict
-from typing import List
-from typing import NamedTuple
-from typing import Union
+from typing import List, NamedTuple
 
-from matplotlib import pyplot as plt
-from matplotlib.patches import Patch
-from matplotlib.axes._axes import Axes
-from matplotlib.figure import Figure
-import numpy as np
-from osgeo import gdal
 import pyproj
 import shapely
 import shapely.ops
+from osgeo import gdal
 
 
 class Bounds(NamedTuple):
@@ -46,7 +35,7 @@ class GdalUtils(object):
         x_max = x_min + cols * transform[1]
         y_min = y_max + rows * transform[-1]
         return Bounds(x_min, y_min, x_max, y_max)
-    
+
     def estimate_utm_crs(self, lon: float, lat: float, **kwargs) -> str:
         """
         UTMのCRSを推定する。日本の場合は "datum_name='JGD2011'" を指定する。
@@ -58,7 +47,7 @@ class GdalUtils(object):
         Returns:
             (str): WKT-CRS
         """
-        datum_name = kwargs.get('datum_name', 'JGD2011')
+        datum_name = kwargs.get("datum_name", "JGD2011")
         # UTMのCRSを推定する
         aoi = pyproj.aoi.AreaOfInterest(
             west_lon_degree=lon,
@@ -67,16 +56,16 @@ class GdalUtils(object):
             north_lat_degree=lat,
         )
         utm_crs_lst = pyproj.database.query_utm_crs_info(
-            datum_name=datum_name,
-            area_of_interest=aoi
+            datum_name=datum_name, area_of_interest=aoi
         )
         return pyproj.CRS.from_epsg(utm_crs_lst[0].code).to_wkt()
 
-    def reproject_xy(self,
+    def reproject_xy(
+        self,
         xs: float | List[float],
         ys: float | List[float],
         in_crs: str,
-        out_crs: str
+        out_crs: str,
     ) -> XY:
         """
         XYの投影変換
@@ -99,16 +88,12 @@ class GdalUtils(object):
             >>> y
             [-553344.5836010452, -443620.80651071604]
         """
-        tf = pyproj.Transformer.from_crs(
-            in_crs, out_crs, always_xy=True
-        )
+        tf = pyproj.Transformer.from_crs(in_crs, out_crs, always_xy=True)
         x, y = tf.transform(xs, ys)
         return XY(x, y)
-    
-    def reprojection_geometry(self, 
-        wkt_geometry: str, 
-        in_wkt_crs: str, 
-        out_wkt_crs: str
+
+    def reprojection_geometry(
+        self, wkt_geometry: str, in_wkt_crs: str, out_wkt_crs: str
     ) -> str:
         """
         ジオメトリの投影変換
@@ -126,22 +111,20 @@ class GdalUtils(object):
             >>> new_wkt_geometry = gprojection.reprojection_geometry(wkt_geometry, in_wkt_crs, out_wkt_crs)
         """
         geom = shapely.from_wkt(wkt_geometry)
-        project = (
-            pyproj
-            .Transformer
-            .from_crs(in_wkt_crs, out_wkt_crs, always_xy=True)
-            .transform
-        )
+        project = pyproj.Transformer.from_crs(
+            in_wkt_crs, out_wkt_crs, always_xy=True
+        ).transform
         transformed_geom = shapely.ops.transform(project, geom)
         return transformed_geom.wkt
 
-    def degree_from_metre(self, 
-        metre: float, 
-        x: float, 
-        y: float, 
+    def degree_from_metre(
+        self,
+        metre: float,
+        x: float,
+        y: float,
         in_wkt_crs: str,
-        digit: int=10,
-        **kwargs
+        digit: int = 10,
+        **kwargs,
     ) -> float:
         """
         MetreからDegreeに変換する。
@@ -158,13 +141,13 @@ class GdalUtils(object):
         Examples:
             >>> gutils = GdalUtils()
             >>> metre = 1000
-            >>> x = -167354.7591972514 
+            >>> x = -167354.7591972514
             >>> y = -553344.5836010452
             >>> in_wkt_crs = pyproj.CRS.from_epsg(6678).to_wkt()
             >>> degree = gutils.degree_from_metre(metre, x, y, in_wkt_crs)
             0.0109510791
         """
-        x_direction = kwargs.get('x_direction', True)
+        x_direction = kwargs.get("x_direction", True)
         if x_direction:
             # x方向のベクトルを指定する
             line = shapely.LineString([[x, y], [x + metre, y]]).wkt
@@ -177,13 +160,9 @@ class GdalUtils(object):
         # 線分の長さを取得する
         degree = shapely.from_wkt(new_line).length
         return round(degree, digit)
-    
-    def metre_from_degree(self,
-        degree: float,
-        lon: float,
-        lat: float,
-        digit: int=4,
-        **kwargs
+
+    def metre_from_degree(
+        self, degree: float, lon: float, lat: float, digit: int = 4, **kwargs
     ) -> float:
         """
         DegreeからMetreに変換する
@@ -204,7 +183,7 @@ class GdalUtils(object):
             >>> metre = gutils.metre_from_degree(degree, lon, lat)
             9.1289
         """
-        x_direction = kwargs.get('x_direction', True)
+        x_direction = kwargs.get("x_direction", True)
         if x_direction:
             # x方向のベクトルを指定する
             line = shapely.LineString([[lon, lat], [lon + degree, lat]]).wkt
@@ -217,7 +196,3 @@ class GdalUtils(object):
         new_line = self.reprojection_geometry(line, in_wkt_crs, out_wkt_crs)
         metre = shapely.from_wkt(new_line).length
         return round(metre, digit)
-
-
-
-
