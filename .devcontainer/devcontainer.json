@@ -1,0 +1,35 @@
+{
+    "name": "geo-pyenv",
+    "build": {
+        "dockerfile": "./Dockerfile"
+    },
+    "init": true,
+    "customizations": {
+        "vscode": {
+            "settings": {
+                "[python]": {
+                    "editor.formatOnSave": true,
+                    "editor.rulers": [80],
+                    "editor.tabSize": 4,
+                    "editor.minimap.enabled": false,
+                    "editor.codeActionsOnSave": {
+                        "source.fixAll": "explicit",
+                        "source.organizeImports": "explicit"
+                    },
+                    "editor.defaultFormatter": "charliermarsh.ruff"
+                }
+            },
+            "extensions": [
+                "ms-python.python",
+                "charliermarsh.ruff",
+                "KevinRose.vsc-python-indent",
+                "njpwerner.autodocstring",
+                "VisualStudioExptTeam.vscodeintellicode",
+                "ms-azuretools.vscode-docker",
+                "github.copilot",
+                "github.vscode-pull-request-github",
+                "ms-vscode-remote.remote-containers"
+            ]
+        }
+    }
+}
