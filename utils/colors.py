@@ -1,244 +1,195 @@
-"""
-Do not use doctest.
+from typing import Any, Iterable, Union
 
-このモジュールでは、matplotlibのカラーマップを拡張するためのクラスを提供しています。
-
-# Example
--------------------------------------------------------------------------------
-## 連続値を使用したカスタムColorMapの作成
-これは`matplotlib.colors.LinearSegmentedColormap`の拡張クラスを返す。
-```python
->>> colors = ['red', 'green', 'blue']
->>> custom_cmap = CustomCmap()
->>> cmap = custom_cmap.color_list_to_linear_cmap(colors)
->>> type(cmap)
-<class '__main__.LinearColorMap'>
-```
--------------------------------------------------------------------------------
-## 作成したカスタムColorMapからIndexを指定して色を取得する
-```python
->>> # Indexの色を取得する
->>> cmap.get(0)
-(1.0, 0.0, 0.0)
->>> # rgbaの色を取得する
->>> cmap.get(0, 'rgba')
-(1.0, 0.0, 0.0, 1.0)
->>> # Hexの色を取得する
->>> cmap.get(0, 'hex')
-'#ff0000'
->>> # intの色を取得する
->>> cmap.get(0, 'int')
-(255, 0, 0)
->>> # intaの色を取得する
->>> cmap.get(0, 'inta')
-(255, 0, 0, 255)
->>> # Index配列で色を取得する。2次元でも可
->>> idx = [0, 128, 255]
->>> cmap.get(idx, 'rgba')
-[(1.0, 0.0, 0.0, 1.0), (0.0, 0.5019607843137255, 0.0, 1.0), (0.0, 0.0, 1.0, 1.0)]
-```
--------------------------------------------------------------------------------
-## カスタムColorMapに登録された色を全て取得する
-```python
->>> rgba_list = cmap.get_registered_color('rgba')
-[(1.0, 0.0, 0.0, 1.0), (0.0, 0.5019607843137255, 0.0, 1.0), ...]
->>> len(rgba_list)
-256
-```
--------------------------------------------------------------------------------
-## 連続値の配列からRGB画像を作成する
-```python
->>> values = np.random.normal(0, 1, 100).reshape(10, 10)
->>> img = cmap.values_to_img(values, 'inta')
->>> plt.imshow(img)
->>> plt.show()
-```
-"""
-from typing import Any
-from typing import Callable
-from typing import Iterable
-from typing import List
-from typing import Tuple
-from typing import Union
-
-from matplotlib.colors import to_hex
-from matplotlib.colors import to_rgba
-from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.colors import (
+    to_hex, to_rgb, to_rgba, 
+    LinearSegmentedColormap,
+    ListedColormap
+)
 import numpy as np
 
-class CustomCmap(object):
-    @staticmethod
-    def __to_rgba(arg_index: int, arg_name: str) -> Callable:
-        """
-        Listの要素をTuple(float)に変換するデコレータ。
-        引数として想定しているのは、List[str(Hex)]か、あるいはList[int(0-255)]。
-        """
-        def decorator(func: Callable) -> str:
-            def wrapper(self, *args, **kwargs) -> str:
-                is_args = True
-                if arg_index < len(args):
-                    colors = args[arg_index]
-                elif arg_name in kwargs:
-                    colors = kwargs[arg_name]
-                    is_args = False
-                else:
-                    raise ValueError(f'{arg_name} is required.')
-                # Convert to rgba color
-                converted_colors = []
-                for color in colors:
-                    if isinstance(color, int):
-                        converted_colors.append(color / 255)
-                    elif isinstance(color, str):
-                        converted_colors.append(to_rgba(color))
-                    elif isinstance(color, float):
-                        converted_colors.append(color)
-                    else:
-                        raise ValueError(f'Invalid {arg_name} type.')
-                if is_args:
-                    args = list(args)
-                    args[arg_index] = converted_colors
-                    return func(self, *args, **kwargs)
-                else:
-                    kwargs[arg_name] = converted_colors
-                    return func(self, *args, **kwargs)
-            return wrapper
-        return decorator
+UniqueIterable = Union[list, tuple, np.ndarray]
+
+
+def dimensional_count(value: UniqueIterable) -> int:
+    """
+    ## Summary:
+        Recursively determine the dimensionality of a list.
+    Arguments:
+        value (tuple | list | np.ndarray):
+            The list to be measured.
+    Returns:
+        int: The dimensionality of the list.
+            - 0: The value is not a list. (str, int, float, etc.)
+            - 1: The value is a list.
+            - 2: The value is a list of lists.
+            - 3: The value is a list of lists of lists.
+            - ...
+    Examples:
+        >>> dimensional_measurement(1)
+        0
+        >>> dimensional_measurement('a')
+        0
+        >>> dimensional_measurement([1, 2, 3])
+        1
+        >>> dimensional_measurement([[1, 2, 3], [4, 5, 6]])
+        2
+        >>> dimensional_measurement([[[1, 2, 3], [4, 5, 6]], [[7, 8, 9], [10, 11, 12]]])
+        3
+    """
+    if isinstance(value, UniqueIterable):
+        try:
+            value = value.tolist()
+        except:
+            try:
+                value = value.tolist()
+            except:
+                pass
+        return 1 + max(dimensional_count(item) for item in value) if value else 1
+    else:
+        return 0
     
-    @staticmethod
-    def __round_values(digits: int):
-        """戻り値のリストの要素を小数点第4位まで丸めるデコレータ。"""
-        def decorator(func):
-            def wrapper(self, *args, **kwargs):
-                result = func(self, *args, **kwargs)
-                if isinstance(result, list):
-                    return [[round(c, digits) for c in col] for col in result]
-                return result
-            return wrapper
-        return decorator
 
-    @staticmethod
-    def __check_float_values(arg_index: int, arg_name: str):
-        """Listの要素がfloatであるかどうかをチェックするデコレータ。"""
-        def decorator(func):
-            def wrapper(self, *args, **kwargs):
-                # データの取得
-                is_args = True
-                if arg_index < len(args):
-                    colors = args[arg_index]
-                elif arg_name in kwargs:
-                    colors = kwargs[arg_name]
-                    is_args = False
-                else:
-                    raise ValueError(f'{arg_name} is required.')
-                # listの中身が変換可能かどうかをチェック
-                colors = self.__contents_is_mpl_color_lst_or_not(colors)
-                # 再格納
-                if is_args:
-                    args = list(args)
-                    args[arg_index] = colors
-                    return func(self, *args, **kwargs)
-                else:
-                    kwargs[arg_name] = colors
-                    return func(self, *args, **kwargs)
-            return wrapper
-        return decorator
-
-    def __contents_is_mpl_color_lst_or_not(self, 
-        colors: List[Any]
-    ) -> List[Tuple[float]]:
-        is_ok = False
-        try:
-            # Listの中身が[0, 1]の範囲内が格納されたTupleであるかどうかをチェック
-            is_floats = [all(isinstance(v, float) for v in color) for color in colors]
-            defined_range = []
-            for color in colors:
-                if all([0 <= v <= 1 for v in color]):
-                    defined_range.append(True)
-                else:
-                    defined_range.append(False)
-            is_ok = all(is_floats) and all(defined_range)
-            if is_ok:
-                return colors
-        except:
-            pass
-        try:
-            # Listの中身がHexであるかどうかをチェック
-            colors = [to_rgba(color) for color in colors]
-            return colors
-        except:
-            pass
-        try:
-            colors = [color / 255 for color in colors]
-            return colors
-        except:
-            raise ValueError("Invalid color type. Please check the type of 'colors' in arguments.")
-
-    @__to_rgba(0, 'colors')
-    @__round_values(digits=5)
-    def to_mpl_color_list(self, 
-        colors: List[str | int], 
-        rgba: bool=True
-    ) -> List[float]:
+class Converter(object):
+    def __init__(self, color_list: UniqueIterable, return_type: str = 'rgba'):
         """
-        いくつかの色をリストで受け取り、RGBAのリストに変換する。色の指定方法は、Hex または0-255の整数で指定する。
+        ## Summary:
+            Convert a list of colors to a specified format.
+        Arguments:
+            color_list (list | tuple | np.ndarray):
+                The list of colors to be converted.
+            return_type (str):
+                The format to convert the colors to. Options are 'hex', 'rgb', or 'rgba'.
+        """
+        self._is_alpha = False
+        self._color_list = self._check_color_list(color_list)
+        self._return_type = self._check_return_type(return_type)
+        
+    def _check_color_list(self, color_list: UniqueIterable) -> list[str]:
+        """
+        ## Summary:
+            Check the color list and convert it to a valid format.
         Args:
-            colors (List[str | int]): 色のリスト
-            rgba (bool, optional): RGBAのリストに変換するかどうか. Defaults to True. FalseならばRGBのリストに変換する。
+            color_list (list | tuple | np.ndarray): 
+                The list of colors to be checked and converted.
         Returns:
-            List[float]: RGBAのリスト
-        Examples:
-            >>> colors = Colors()
-            >>> colors.to_mpl_color_list(['red', 'green', 'blue'], False)
-            [(1.0, 0.0, 0.0), (0.0, 0.5019607843137255, 0.0), (0.0, 0.0, 1.0)]
+            list[str]:
+                The converted color list in hex format.
         """
-        if rgba:
-            return colors
+        if not isinstance(color_list, UniqueIterable):
+            raise TypeError("color_list must be a list, "
+                            f"tuple, or np.ndarray, not {type(color_list)}")
+        # Check if the color_list is empty
+        if len(color_list) == 0:
+            raise ValueError("color_list cannot be empty")
+        if all(isinstance(item, str) for item in color_list):
+            # Check if all items are strings
+            try:
+                color_list = [to_hex(item) for item in color_list]
+            except ValueError:
+                raise ValueError("Invalid color string in color_list."
+                                 " Must be a valid color name or hex code.")
+            else:
+                self._is_alpha = False
+                return color_list
+        length_list = [len(item) for item in color_list]
+        if all(length == 3 for length in length_list):
+            color_list = self._normalize(color_list)
+            try:
+                color_list = [to_hex(item) for item in color_list]
+            except ValueError:
+                raise ValueError("All elements in the list must be in RGB format.")
+            else:
+                self._is_alpha = False
+                return color_list
+        elif all(length == 4 for length in length_list):
+            color_list = self._normalize(color_list)
+            try:
+                color_list = [to_hex(item, keep_alpha=True) for item in color_list]
+            except ValueError:
+                raise ValueError("All elements in the list must be in RGBA format.")
+            else:
+                self._is_alpha = True
+                return color_list
         else:
-            return [c[: 3] for c in colors]
+            raise ValueError("All items in the list need to be RGB or RGBA or Hex.")
 
-    @__check_float_values(0, 'colors')
-    def color_list_to_linear_cmap(self,
-            colors: List[Tuple[float]] | List[Tuple[int] | List[str]],
-            **kwargs
-        ) -> Union['LinearColorMap', LinearSegmentedColormap]:
+    def _normalize(self, color_list: UniqueIterable) -> list[float]:
+        array = np.array(color_list)
+        max_ = np.max(array)
+        min_ = np.min(array)
+        if (0 <= min_) and (max_ <= 1):
+            return color_list
+        elif (0 <= min_) and (max_ <= 255):
+            return (array / 255).tolist()
+        elif (0 <= min_) and (max_ <= 65535):
+            return (array / 65535).tolist()
+        else:
+            return color_list
+        
+
+    def _check_return_type(self, return_type: str) -> str:
         """
-        色のリストをカラーマップに変換する。
+        ## Summary:
+            Check the return type and convert it to a valid format.
         Args:
-            colors (List[Tuple[float]] | List[str] | List[Tuple[int]]): 色のリスト\n
-                - List[Tuple[0.0 ~ 1.0]]:
-                - List[str]: Hexカラーコードのリスト
-                - List[Tuple[int]]: 0-255の整数のリスト
-            **kwargs:
-                - positions (List[float]): 色の位置を指定する。デフォルトはNone。指定する場合は、Colorsと同じ長さのList[float]を指定する。floatは0.0 ~ 1.0の範囲内で指定。
-                - name (str): カラーマップの名前を指定する。デフォルトは'custom_cmap'。
+            return_type (str): 
+                The format to convert the colors to. Options are 'hex', 'rgb', or 'rgba'.
         Returns:
-            LinearSegmentedColormap: カラーマップ
+            str:
+                The converted return type.
         """
-        # 色を配置する位置を指定
-        positions = kwargs.get('positions', self.__create_position(colors))
-        positions = self.__check_position(positions)
-        # カラーマップを作成
-        colors = [(position, color) for position, color in zip(positions, colors)]
-        name = kwargs.get('name', 'custom_cmap')
-        cmap = LinearSegmentedColormap.from_list(name, colors, N=256)
-        return LinearColorMap(cmap)
+        if not isinstance(return_type, str):
+            raise TypeError("return_type must be a string")
+        return_type = return_type.lower()
+        if return_type not in ['hex', 'rgb', 'rgba']:
+            raise ValueError("return_type must be one of ['hex', 'rgb', 'rgba']")
+        return return_type
 
-    def __create_position(self, colors: List[Any]) -> List[float]:
+
+
+class CustomCmap(object):
+    def to_mpl_color_list(
+        self, 
+        color_list: UniqueIterable, 
+        rgba: bool = True
+    ) -> list[list[float, float, float]]:
+        converter = Converter(color_list, return_type='rgba' if rgba else 'rgb')
+        if rgba:
+            return [to_rgba(c) for c in converter._color_list]
+        else:
+            return [to_rgb(c) for c in converter._color_list]
+    
+    def __create_position(self, colors: list[Any]) -> list[float]:
         length = len(colors)
         return [i / (length - 1) for i in range(length)]
     
-    def __check_position(self, positions: List[float]) -> List[float]:
+    def __check_position(self, positions: list[float]) -> list[float]:
         positions[0] = 0.0
         positions[-1] = 1.0
         positions.sort()
         if all([0 <= p <= 1 for p in positions]):
             return positions
         return self.__create_position(positions)
-
-
+    
+    def color_list_to_linear_cmap(
+        self, 
+        color_list: UniqueIterable, 
+        **kwargs
+    ) -> Union['LinearColorMap', LinearSegmentedColormap]:
+        positions = kwargs.get('positions', self.__create_position(color_list))
+        positions = self.__check_position(positions)
+        # カラーマップを作成
+        color_list = [(position, color) for position, color in zip(positions, color_list)]
+        name = kwargs.get('name', 'custom_cmap')
+        cmap = LinearSegmentedColormap.from_list(name, color_list, N=256)
+        return LinearColorMap(cmap)
+    
 
 class LinearColorMap(object):
-    def __init__(self, cmap):
+    def __init__(self, cmap: LinearSegmentedColormap | ListedColormap):
+        if isinstance(cmap, ListedColormap):
+            colors = cmap(np.linspace(0, 1, 10))
+            cmap = LinearSegmentedColormap.from_list('custom_cmap', colors, N=256)
         if not isinstance(cmap, LinearSegmentedColormap):
             raise ValueError('cmap must be a LinearSegmentedColormap')
         self.cmap = cmap
@@ -249,13 +200,16 @@ class LinearColorMap(object):
     def __getattr__(self, name: str) -> Any:
         return getattr(self.cmap, name)
     
-    def get(self, position: int | Iterable[int], return_type: str = 'rgba'):
+    def get(self, position: int, return_type: str = 'rgba') -> Any:
         """
         ## Summary
-            このメソッドは、作成したcolormapの指定された位置の色をRGB、RGBA、Hex、int、intaのいずれかの形式で返します。
+            This method returns the color at the specified position of the created colormap
+            in RGB, RGBA, Hex, int, or inta format.
         Args:
-            position (int | Iterable[int]): カラーマップ内の色の位置。整数または整数の配列。
-            return_type (str): The type of the return value. Can be 'rgb' or 'rgba' or 'hex' or 'int' or 'inta'
+            position (int | Iterable[int]): 
+                The position of the color in the color map.An array of integers or whole numbers.
+            return_type (str): 
+                The type of the return value. Can be 'rgb' or 'rgba' or 'hex' or 'int' or 'inta'
         Returns:
             Any:
                 - rgb: Tuple of 3 float
@@ -264,11 +218,11 @@ class LinearColorMap(object):
                 - int: Tuple of 3 integers
                 - inta: Tuple of 4 integers
         Examples:
-            >>> # Indexの色を取得する
+            >>> # Get Index color.
             >>> cmap = LinearColorMap(plt.get_cmap('viridis'))
             >>> cmap.get(0)
             (1.0, 1.0, 1.0)
-            >>> # Index配列の色を取得する
+            >>> # Get the color of the Index array.
             >>> cmap.get([0, 128, 255], 'rgba')
             [(1.0, 1.0, 1.0, 1.0), (0.0, 0.0, 0.0, 1.0), (0.0, 0.0, 0.0, 1.0)]
         """
@@ -280,27 +234,16 @@ class LinearColorMap(object):
                 if isinstance(pos, (int, np.integer)):
                     result.append(self._get(pos, return_type))
                 else:
-                    result.append(self._get_in_list(pos, return_type))
+                    try:
+                        result.append(self._get_in_list(pos, return_type))
+                    except TypeError:
+                        raise TypeError(f'position must be int or Iterable[int], not {type(pos)}')
             return np.array(result)
-            
-    def _get(self, position: int, return_type: str = 'rgb'):
-        """
-        ## Summary
-            colormapの指定された位置の色を取得する。
-        Args:
-            position (int): カラーマップ内の色の位置
-            return_type (str): The type of the return value. Can be 'rgb' or 'rgba' or 'hex' or 'int' or 'inta'
-        Returns:
-            Any:
-                - rgb: Tuple of 3 float
-                - rgba: Tuple of 4 float
-                - str: Hexadecimal color code
-                - int: Tuple of 3 integers
-                - inta: Tuple of 4 integers
-        """
+    
+    def _get(self, position: int, return_type: str = 'rgb') -> Any:
         transparency = False
         if position < 0 or 255 < position:
-            # 範囲外の場合は透明色を返す
+            # Return transparent color if out of range.
             transparency = True
         pattern = ['rgb', 'rgba', 'hex', 'int', 'inta']
         return_type = return_type.lower()
@@ -310,43 +253,42 @@ class LinearColorMap(object):
         # Get the color at the given position
         color = (1., 1., 1., 0) if transparency else self.cmap(position)
         if return_type == 'rgb':
-            # RGBが指定された場合
+            # If RGB is specified.
             if len(color) == 4:
                 return color[:-1]
             else:
                 return color[:-1]
         elif return_type == 'rgba':
-            # RGBAが指定された場合
+            # If RGBA is specified.
             if len(color) == 3:
                 return color + (1.0,)
             else:
                 return color
         elif return_type == 'hex':
-            # Hexが指定された場合
+            # If Hex is specified.
             return to_hex(color)
         elif return_type == 'int' and len(color) == 4:
-            # intが指定された場合
+            # If int is specified.
             if len(color) == 4:
                 return tuple(int(c * 255) for c in color[:-1])
             else:
                 return tuple(int(c * 255) for c in color)
         elif return_type == 'inta':
-            # intaが指定された場合
+            # If inta is specified.
             if len(color) == 3:
                 return tuple(int(c * 255) for c in color) + (255,)
             else:
                 return tuple(int(c * 255) for c in color)
-    
-    def _get_in_list(self, 
-        positions: Iterable[int], 
-        return_type: str = 'rgb'
-    ) -> List[Tuple[float]]:
+
+    def _get_in_list(self, positions: Iterable[int], return_type: str = 'rgb') -> UniqueIterable:
         """
         ## Summary
-            カラーマップ内から指定したの色のリストを取得してListに格納する。
+            Obtains a list of specified colors from the colormap and stores it in List.
         Args:
-            positions (Iterable[int]): カラーマップ内の色の位置のリスト
-            return_type (str): The type of the return value. Can be 'rgb' or 'rgba' or 'hex' or 'int' or 'inta'
+            positions (Iterable[int]): 
+                List of color positions in the colormap.
+            return_type (str): The 
+                type of the return value. Can be 'rgb' or 'rgba' or 'hex' or 'int' or 'inta'
         Returns:
             List:
                 - rgb: List of Tuple of 3 float
@@ -357,20 +299,19 @@ class LinearColorMap(object):
         """
         return [self._get(pos, return_type) for pos in positions]
 
-    def get_registered_color(self, 
-        return_type: str = 'rgb'
-    ) -> List[Tuple[float]]:
+    def get_registered_color(self, return_type: str = 'rgb') -> UniqueIterable:
         """
         ## Summary
-            cmapに登録された色をListで全て取得する。cmapには256個の色が格納されている。
+            Get all colors registered in cmap by List. 256 colors are stored in cmap.
         Args:
-            return_type (str): The type of the return value. Can be 'rgb' or 'rgba' or 'hex' or 'int' or 'inta'
+            return_type (str): 
+                The type of the return value. Can be 'rgb' or 'rgba' or 'hex' or 'int' or 'inta'
         Returns:
             List:
-                長さは256で、各要素は以下のいずれかの形式で格納されている。
+                The length is 256, and each element is stored in one of the following formats
                 - rgb: List of Tuple of 3 float
                 - rgba: List of Tuple of 4 float
-                - str: List of Hexadecimal color code
+                - hex: List of Hexadecimal color code
                 - int: List of Tuple of 3 integers
                 - inta: List of Tuple of 4 integers
         Examples:
@@ -388,33 +329,38 @@ class LinearColorMap(object):
     ) -> Iterable[int]:
         """
         ## Summary
-            ある値の配列から、カラーマップのインデックスを生成する。これは、カラーマップから色を取得するために使用される。
+            Generate a colormap index from an array of values.
+            This is used to retrieve a color from the colormap.
         Args:
-            values (Iterable[float] | Iterable[int]): Indexに変換したい値の配列。これは、0-255の範囲に収まるように正規化されるが、'in_nodata_value'や nan、infの値は'out_nodata_index'に置換される。
-            配列は、1次元または2次元のnp.ndarrayである必要がある。
+            values (Iterable[float] | Iterable[int]): 
+            An array of values to be converted to Index.
+            This will be normalized to fall within the range 0-255,
+            but 'in_nodata_value', nan and inf values will be replaced by 'out_nodata_index'.
+            The array must be a 1D or 2D np.ndarray.
         Returns:
-            Iterable[int]: The index for retrieval
+            Iterable[int]: 
+                The index for retrieval
         Examples:
             >>> cmap = LinearColorMap(plt.get_cmap('viridis'))
             >>> values = np.random.normal(0, 1, 100).reshape(10, 10)
             >>> indices = cmap.generate_idx_for_retrieval(values)
         """
-        if not isinstance(values, np.ndarray) and isinstance(values, Iterable):
+        if not isinstance(values, np.ndarray) and (2 <= dimensional_count(values) <= 3):
             values = np.array(values)
         if not isinstance(values, np.ndarray):
             raise ValueError('values must be an Iterable')
-        # np.inf や NoDataの値をnanに変換
+        # Convert np.inf or NoData values to nan.
         values = np.where(values == in_nodata_value, np.nan, values)
         values = np.where(np.isinf(values), np.nan, values)
-        # nanのIndexを取得しておく
+        # Get the index of the nan.
         nan_idx = np.isnan(values)
-        # 0-255の範囲に正規化
+        # Normalize to the range 0-255.
         max_ = np.nanmax(values)
         min_ = np.nanmin(values)
         mean_ = np.nanmean(values)
         values[nan_idx] = mean_
         index_ary = np.round((values - min_) / (max_ - min_) * 255).astype(int)
-        # nanが入力されていた場合は、out_nodata_indexに置換
+        # If nan was entered, replace with out_nodata_index.
         index_ary[nan_idx] = out_nodata_index
         return index_ary
 
@@ -425,14 +371,17 @@ class LinearColorMap(object):
     ) -> np.ndarray:
         """
         ## Summary
-            連続値の配列からRGB画像を作成する。
+            Create an RGB image from an array of continuous values.
         Args:
-            values (Iterable[Iterable[float]]): 連続値の配列
-            return_type (str): The type of the return value. Can be 'rgb' or 'rgba' or 'int' or 'inta'
+            values (Iterable[Iterable[float]]): 
+                Array of continuous values.
+            return_type (str): 
+                The type of the return value. Can be 'rgb' or 'rgba' or 'int' or 'inta'
         Returns:
-            np.ndarray: RGB画像
+            np.ndarray: 
+                RGB Image
         Examples:
-            >>> # 連続値の2次元配列から設定したカラーマップを使ってRGB画像を作成する。
+            >>> # Create an RGB image using a color map set up from a two-dimensional array of continuous values.
             >>> custom_cmap = CustomColorMap()
             >>> cmap = custom_cmap.color_list_to_linear_cmap(['red', 'green', 'blue'])
             >>> values = np.random.normal(0, 1, 100).reshape(10, 10)
@@ -440,7 +389,7 @@ class LinearColorMap(object):
             >>> plt.imshow(img)
             >>> plt.show()
             >>> #--------------------------------
-            >>> # matplotlibのカラーマップを使ってRGB画像を作成する。
+            >>> # Create RGB images using matplotlib colormaps.
             >>> cmap = LinearColorMap(plt.get_cmap('viridis'))
             >>> img = cmap.values_to_img(values)
             >>> plt.imshow(img)
@@ -451,12 +400,12 @@ class LinearColorMap(object):
         if return_type not in pattern:
             # return_type must be one of pattern
             raise ValueError(f'return_type must be one of {pattern}')
-        # NoDataのIndexを取得
+        # Get Index of NoData
         indices = self.generate_idx_for_retrieval(values)
         nodata_idxs = indices == nodata_value
         colors = np.array(self.get_registered_color(return_type))
         img = colors[indices]
-        # NoDataのIndexを透明色に変換
+        # Convert Index of NoData to transparent color
         if img.shape[-1] == 4:
             img[nodata_idxs] = [255, 255, 255, 0]
         else:

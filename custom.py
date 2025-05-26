@@ -20,7 +20,19 @@ gdal.UseExceptions()
 from gdal_drawer.gdal_utils import GdalUtils
 from gdal_drawer.kernels import kernels
 from gdal_drawer.utils.exceptions import custom_gdal_exception
-
+from gdal_drawer.utils.colors import dimensional_count
+from gdal_drawer.utils.preprocessing import (
+    copy_memory,
+    copy_temppfile,
+    nodata_to_nan,
+    fill_nodata,
+    expansion_dst,
+)
+from gdal_drawer.utils.raster_info import (
+    get_bounds,
+    estimate_utm_crs_from_datasets,
+    resolution_from_dataset,
+)
 gdal_utils = GdalUtils()
 
 
@@ -70,13 +82,14 @@ class CustomGdalDataset(object):
             custom_gdal_exception.not_gdal_dataset_err()
         if dataset.GetProjection() == "":
             custom_gdal_exception.not_have_crs_err()
-        self.dataset = self._copy_dataset(dataset)
+        self._temp_file = copy_temppfile(dataset)
+        self.dataset = self._temp_file.dataset
 
     def __getattr__(self, module_name):
         return getattr(self.dataset, module_name)
 
     @staticmethod
-    def __check_crs(crs_index: int, crs_arg_name: str):
+    def _check_crs(crs_index: int, crs_arg_name: str):
         """
         ## Summary
             CRSが正しく指定されているかチェックするデコレータ
@@ -106,8 +119,6 @@ class CustomGdalDataset(object):
                 elif crs_arg_name in kwargs:
                     crs = kwargs[crs_arg_name]
                     in_args = False
-                else:
-                    in_args = False
                 # CRSをWkt形式に変換
                 crs = convert_crs(crs)
                 if in_args:
@@ -122,7 +133,7 @@ class CustomGdalDataset(object):
         return decorator
 
     @staticmethod
-    def __check_datum(arg_index: int, arg_name: str):
+    def _check_datum(arg_index: int, arg_name: str):
         """
         ## Summary
             データムが正しく指定されているかチェックするデコレータ
@@ -130,19 +141,21 @@ class CustomGdalDataset(object):
 
         def decorator(func: Callable):
             def warpper(self, *args, **kwargs):
-                datum_name = kwargs.get("datum_name", "JGD2011")
+                datum_name = None
+                if arg_index < len(args):
+                    datum_name = args[arg_index]
+                elif arg_name in kwargs:
+                    datum_name = kwargs[arg_name]
                 try:
                     _ = pyproj.CRS(datum_name).to_authority()
                 except pyproj.exceptions.CRSError:
                     custom_gdal_exception.unknown_datum_err()
                 return func(self, *args, **kwargs)
-
             return warpper
-
         return decorator
 
     @staticmethod
-    def __is_iterable_of_ints(arg_index: int, arg_name: str):
+    def _is_iterable_of_ints(arg_index: int, arg_name: str):
         """
         ## Summary
             引数がint型またはint型のイテラブルであるかチェックするデコレータ
@@ -153,29 +166,37 @@ class CustomGdalDataset(object):
 
         def decorator(func):
             def wrapper(self, *args, **kwargs):
+                def is_all_int(lst):
+                    if isinstance(lst, list):
+                        return all(is_all_int(elem) for elem in lst)
+                    return isinstance(lst, int)
+
                 if arg_index < len(args):
                     value = args[arg_index]
                 elif arg_name in kwargs:
                     value = kwargs[arg_name]
                 else:
+                    # 引数が指定されていない場合はNoneを返す
                     value = None
-
-                if isinstance(value, Iterable):
-                    if all(isinstance(item, int) for item in value):
-                        return func(self, *args, **kwargs)
-                elif isinstance(value, int):
+                
+                if isinstance(value, int):
                     return func(self, *args, **kwargs)
+                
+                count = dimensional_count(value)
+                if 0 < count <= 3:
+                    if is_all_int(value):
+                        return func(self, *args, **kwargs)
+                    else:
+                        custom_gdal_exception.get_band_number_err()
                 elif value is None:
                     return func(self, *args, **kwargs)
                 else:
                     custom_gdal_exception.get_band_number_err()
-
             return wrapper
-
         return decorator
 
     @staticmethod
-    def __wkt_geometry_check(arg_index: int, arg_name: str) -> str:
+    def _wkt_geometry_check(arg_index: int, arg_name: str) -> str:
         """
         ## Summary
             ジオメトリがWKT形式であるかチェックする。shapely.geometryだった場合はWKT形式に変換する
@@ -194,8 +215,7 @@ class CustomGdalDataset(object):
                 elif arg_name in kwargs:
                     geom = kwargs[arg_name]
                     in_args = False
-                else:
-                    raise ValueError("The geometry argument was not found.")
+
                 # WKT形式に変換
                 if isinstance(geom, str):
                     try:
@@ -228,7 +248,7 @@ class CustomGdalDataset(object):
         return decorator
 
     @staticmethod
-    def __band_check(count: int):
+    def _band_check(count: int):
         """
         ## Summary
             datasetのBand数が指定された数と一致するかチェックする.
@@ -265,7 +285,7 @@ class CustomGdalDataset(object):
         """
         return self.GetGeoTransform()[-1]
 
-    @__is_iterable_of_ints(0, "band_numbers")
+    @_is_iterable_of_ints(0, "band_numbers")
     def array(self, band_numbers: int | Iterable[int] = None) -> np.ndarray:
         """
         ## Summary
@@ -285,10 +305,8 @@ class CustomGdalDataset(object):
             return self._get_all_ary()
         elif isinstance(band_numbers, int):
             return self._get_selected_ary(band_numbers)
-        elif isinstance(band_numbers, Iterable):
-            return self._get_selected_arys(band_numbers)
         else:
-            custom_gdal_exception.get_band_err()
+            return self._get_selected_arys(band_numbers)
 
     def array_of_image(self) -> Union[gdal.Band, List[gdal.Band]]:
         if self.RasterCount < 3:
@@ -385,35 +403,24 @@ class CustomGdalDataset(object):
 
     #######################################################################
     # -------------------- Methods for create dataset. --------------------
-    def copy_dataset(self) -> Union["CustomGdalDataset", gdal.Dataset]:
+    def copy_dataset(self, memory: bool = True) -> Union["CustomGdalDataset", gdal.Dataset]:
         """
         ## Summary
             `gdal.Dataset`のコピーを作成する。
+        Args:
+            memory(bool): 
+                メモリ上にコピーを作成するかどうか.
         Returns:
             CustomGdalDataset(gdal.Dataset): 拡張された gdal.Dataset
         Examples:
             >>> new_dst: gdal.Dataset = dst.copy_dataset()
         """
-        driver = gdal.GetDriverByName("MEM")
-        new_dst = driver.CreateCopy("", self.dataset)
-        return CustomGdalDataset(new_dst)
-
-    def _copy_dataset(
-        self, dst: gdal.Dataset
-    ) -> Union["CustomGdalDataset", gdal.Dataset]:
-        """
-        ## Summary
-            `gdal.Dataset`のコピーを作成する。
-        Args:
-            CustomGdalDataset(gdal.Dataset): 拡張された gdal.Dataset
-        Returns:
-            (gdal.Dataset):
-        Examples:
-            >>> new_dst: gdal.Dataset = dst._copy_dataset()
-        """
-        driver = gdal.GetDriverByName("MEM")
-        new_dst = driver.CreateCopy("", dst)
-        return new_dst
+        if memory:
+            _dst = copy_memory(self.dataset)
+        else:
+            temp_file = copy_temppfile(self.dataset)
+            _dst = temp_file.dataset
+        return CustomGdalDataset(_dst)
 
     def save_dst(self, file_path: Path, fmt: str = "GTiff") -> None:
         """
@@ -583,7 +590,11 @@ class CustomGdalDataset(object):
         return color_interpretations[idx]
 
     def fill_nodata(
-        self, max_search_distance: int, smoothing: int = 10
+        self, 
+        max_search_distance: int = 10, 
+        smoothing: int = 2,
+        return_array: bool = False,
+        release_memory: bool = True
     ) -> Union["CustomGdalDataset", gdal.Dataset]:
         """
         ## Summary
@@ -594,69 +605,20 @@ class CustomGdalDataset(object):
         Returns:
             CustomGdalDataset(gdal.Dataset): 拡張された gdal.Dataset
         """
-        if self.RasterCount == 1:
-            return self._fill_nodata_of_single_band(max_search_distance, smoothing)
-        return self._fill_nodata_of_multi_band(max_search_distance, smoothing)
-
-    def _fill_nodata_of_single_band(
-        self, max_search_distance: int, smoothing: int
-    ) -> Union["CustomGdalDataset", gdal.Dataset]:
-        """
-        ## Summary
-            SingleBandのNoDataを埋める
-        Args:
-            max_search_distance(int): 最大探索距離
-            smoothing(int, optional): スムージングの回数. Defaults to 10.
-        Returns:
-            CustomGdalDataset(gdal.Dataset): 拡張された gdal.Dataset
-        """
-        # 入力されるデータセットの作成
-        write_dst = self.copy_dataset()
-        # マスクに使用するデータセット
-        mask_dst = self.copy_dataset()
-        mask_ary = mask_dst.array()
-        mask_ary = np.where(np.isnan(mask_ary), False, True)
-        mask_band = mask_dst.GetRasterBand(1)
-        mask_band.WriteArray(mask_ary)
-        write_band = write_dst.GetRasterBand(1)
-        gdal.FillNodata(
-            write_band,
-            mask_band,
-            maxSearchDist=max_search_distance,
-            smoothingIterations=smoothing,
+        
+        nodata_nan = True if np.isnan(self.GetRasterBand(1).GetNoDataValue()) else False
+        result = fill_nodata(
+            dst=self.dataset,
+            nodata_nan=nodata_nan,
+            max_search=max_search_distance,
+            smoothing=smoothing,
+            return_array=return_array,
+            release_memory=release_memory,
         )
-        return CustomGdalDataset(write_dst.dataset)
+        if isinstance(result, gdal.Dataset):
+            return CustomGdalDataset(result)
+        return result
 
-    def _fill_nodata_of_multi_band(
-        self, max_search_distance: int, smoothing: int
-    ) -> Union["CustomGdalDataset", gdal.Dataset]:
-        """
-        ## Summary
-            MultiBandの`gdal.Dataset`のNoDataを埋める※ MultiBandの場合は int型を使用しているのでnp.nanは使用できない。修正が必要？
-        Args:
-            max_search_distance(int): 最大探索距離
-            smoothing(int, optional): スムージングの回数. Defaults to 10.
-        Returns:
-            CustomGdalDataset(gdal.Dataset): 拡張された gdal.Dataset
-        """
-        # 入力されるデータセットの作成
-        write_dst = self.copy_dataset()
-        # マスクに使用するデータセット
-        mask_dst = self.copy_dataset()
-        # 穴埋め箇所をFalse, それ以外をTrueに変換
-        mask_ary = mask_dst.array()[0]
-        mask_ary = np.where(np.isnan(mask_ary), False, True)
-        for write_band, mask_band in zip(
-            write_dst._band_generator, mask_dst._band_generator
-        ):
-            mask_band.WriteArray(mask_ary)
-            gdal.FillNodata(
-                write_band,
-                mask_band,
-                maxSearchDist=max_search_distance,
-                smoothingIterations=smoothing,
-            )
-        return CustomGdalDataset(write_dst.dataset)
 
     def expansion_dst(
         self, vertical: int, horizontal: int
@@ -714,7 +676,7 @@ class CustomGdalDataset(object):
         y_min = y_max + rows * self.y_resolution
         return Bounds(x_min, y_min, x_max, y_max)
 
-    @__check_crs(0, "out_crs")
+    @_check_crs(0, "out_crs")
     def reprojected_bounds(
         self, out_crs: Optional[Union[str, int, pyproj.CRS]]
     ) -> Bounds:
@@ -737,7 +699,7 @@ class CustomGdalDataset(object):
         )
         return Bounds(xs[0], ys[0], xs[1], ys[1])
 
-    @__check_crs(0, "out_crs")
+    @_check_crs(0, "out_crs")
     def center(self, out_crs: Optional[Union[str, int, pyproj.CRS]] = None) -> XY:
         """
         ## Summary
@@ -977,7 +939,7 @@ class CustomGdalDataset(object):
         crs = pyproj.CRS(self.GetProjection())
         return crs.axis_info[0].unit_name == "metre"
 
-    @__check_datum(0, "datum_name")
+    @_check_datum(0, "datum_name")
     def estimate_utm_crs(self, **kwargs) -> str:
         """
         ## Summary
@@ -1069,7 +1031,7 @@ class CustomGdalDataset(object):
 
     ############################################################################
     # ----------------- Methods for projection transform. -----------------
-    @__check_crs(0, "out_crs")
+    @_check_crs(0, "out_crs")
     def reprojected_dataset(
         self, out_crs: str
     ) -> Union["CustomGdalDataset", gdal.Dataset]:
@@ -1267,7 +1229,7 @@ class CustomGdalDataset(object):
             srcNodata=self.GetRasterBand(1).GetNoDataValue(),
         )
 
-    @__wkt_geometry_check(0, "wkt_poly")
+    @_wkt_geometry_check(0, "wkt_poly")
     def clip_by_wkt_poly(
         self, wkt_poly: str | shapely.Polygon, nodata: Any = np.nan, **kwargs
     ) -> Union["CustomGdalDataset", gdal.Dataset]:
@@ -1293,7 +1255,7 @@ class CustomGdalDataset(object):
         )
         return CustomGdalDataset(gdal.Warp("", self.dataset, options=options))
 
-    @__wkt_geometry_check(0, "wkt_poly")
+    @_wkt_geometry_check(0, "wkt_poly")
     def clip_by_bounds(
         self, wkt_poly: str | shapely.Polygon, nodata: Any = np.nan, **kwargs
     ) -> Union["CustomGdalDataset", gdal.Dataset]:
@@ -1317,7 +1279,7 @@ class CustomGdalDataset(object):
         poly_crs = kwargs.get("poly_crs", self.GetProjection())
         return self.clip_by_wkt_poly(wkt_poly, nodata, poly_crs=poly_crs)
 
-    @__wkt_geometry_check(0, "wkt_poly")
+    @_wkt_geometry_check(0, "wkt_poly")
     def clip_by_fit_bounds(
         self, wkt_poly: str | shapely.Polygon, nodata: Any = np.nan, **kwargs
     ) -> Union["CustomGdalDataset", gdal.Dataset]:
@@ -1343,8 +1305,8 @@ class CustomGdalDataset(object):
 
     ############################################################################
     # ----------------- Methods for mask dataset. -----------------
-    @__wkt_geometry_check(0, "wkt_geom")
-    @__check_crs(1, "in_wkt_crs")
+    @_wkt_geometry_check(0, "wkt_geom")
+    @_check_crs(1, "in_wkt_crs")
     def get_masked_array(
         self,
         wkt_geom: str,
@@ -1528,7 +1490,7 @@ class CustomGdalDataset(object):
 
     ############################################################################
     # ----------------- DEM processing methods for dathaset. -----------------
-    @__band_check(count=1)
+    @_band_check(count=1)
     def hillshade(
         self, azimuth: int = 315, altitude: int = 45, z_factor: float = 1, **kwargs
     ) -> Union["CustomGdalDataset", gdal.Dataset]:
@@ -1581,7 +1543,7 @@ class CustomGdalDataset(object):
             return hillshade_ary
         return CustomGdalDataset(new_dst)
 
-    @__band_check(count=1)
+    @_band_check(count=1)
     def slope_original(self, **kwargs) -> Union["CustomGdalDataset", gdal.Dataset]:
         """
         ## Summary
@@ -1626,7 +1588,7 @@ class CustomGdalDataset(object):
             return slope_ary.astype(np.float16)
         return CustomGdalDataset(new_dst)
 
-    @__band_check(count=1)
+    @_band_check(count=1)
     def slope_with_distance_spec(
         self, distance: float, **kwargs
     ) -> Union["CustomGdalDataset", gdal.Dataset]:
@@ -1659,7 +1621,7 @@ class CustomGdalDataset(object):
             return slope_ary
         return self.write_ary_to_mem(slope_ary)
 
-    @__band_check(count=1)
+    @_band_check(count=1)
     def slope_with_cells_spec(
         self, x_cells: int, y_cells: int, **kwargs
     ) -> Union["CustomGdalDataset", gdal.Dataset]:
@@ -1719,7 +1681,7 @@ class CustomGdalDataset(object):
         slope_ary = slope_ary[y_cells:-y_cells, x_cells:-x_cells]
         return slope_ary.astype(np.float16)
 
-    @__band_check(count=1)
+    @_band_check(count=1)
     def aspect(
         self, zero_for_flat=True, **kwargs
     ) -> Union["CustomGdalDataset", gdal.Dataset]:
@@ -1757,7 +1719,7 @@ class CustomGdalDataset(object):
             return aspect_ary
         return CustomGdalDataset(new_dst)
 
-    @__band_check(count=1)
+    @_band_check(count=1)
     def tri(self, **kwargs) -> Union["CustomGdalDataset", gdal.Dataset]:
         """
         ## Summary
@@ -1785,7 +1747,7 @@ class CustomGdalDataset(object):
             return tri_ary.astype(np.float16)
         return CustomGdalDataset(new_dst)
 
-    @__band_check(count=1)
+    @_band_check(count=1)
     def tpi(self, **kwargs) -> Union["CustomGdalDataset", gdal.Dataset]:
         """
         ## Summary
