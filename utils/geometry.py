@@ -1,15 +1,10 @@
 import pyproj
 import shapely
 
-from gdal_drawer.utils.config import (
-    CRS, 
-    crs_checker, 
-    GEOMETRY, 
-    geometry_checker
-)
+from gdal_drawer.utils.config import CRS, GEOMETRY, crs_checker, geometry_checker
 
 
-def estimate_utm_crs(lon: float, lat: float, datum_name: str = 'JGD2011') -> str:
+def estimate_utm_crs(lon: float, lat: float, datum_name: str = "JGD2011") -> str:
     """
     ## Summary:
         Estimate the UTM CRS. In Japan, specify "datum_name='JGD2011'".
@@ -20,6 +15,11 @@ def estimate_utm_crs(lon: float, lat: float, datum_name: str = 'JGD2011') -> str
     Returns:
         (str): WKT-CRS
     """
+    try:
+        # Check if the datum_name is valid
+        pyproj.CRS.from_user_input(datum_name)
+    except pyproj.exceptions.CRSError:
+        raise ValueError("Invalid datum_name. Use 'WGS 84', 'JGD2011', etc.")
     # Estimate the UTM CRS
     aoi = pyproj.aoi.AreaOfInterest(
         west_lon_degree=lon,
@@ -33,13 +33,11 @@ def estimate_utm_crs(lon: float, lat: float, datum_name: str = 'JGD2011') -> str
     return pyproj.CRS.from_epsg(utm_crs_lst[0].code)
 
 
-@geometry_checker(0, 'geometry')
-@crs_checker(1, 'in_crs')
-@crs_checker(2, 'out_crs')
+@geometry_checker(0, "geometry")
+@crs_checker(1, "in_crs")
+@crs_checker(2, "out_crs")
 def reprojection_geometry(
-    geometry: GEOMETRY, 
-    in_crs: CRS, 
-    out_crs: CRS
+    geometry: GEOMETRY, in_crs: CRS, out_crs: CRS
 ) -> shapely.geometry.base.BaseGeometry:
     """
     ## Summary:
@@ -58,44 +56,38 @@ def reprojection_geometry(
     try:
         geom = shapely.transform(geometry, transformer.transform, interleaved=False)
     except:
-        geom = shapely.ops.transform(
-            transformer.transform, geometry
-        )
+        geom = shapely.ops.transform(transformer.transform, geometry)
     return geom
 
 
-@geometry_checker(0, 'geometry')
-@crs_checker(1, 'in_crs')
+@geometry_checker(0, "geometry")
+@crs_checker(1, "in_crs")
 def estimate_utm_crs_from_geometry(
     geometry: GEOMETRY,
     in_crs: CRS,
-    datum_name: str = 'JGD2011',
+    datum_name: str = "JGD2011",
 ) -> pyproj.CRS:
     """
     ## Summary:
         Estimate the UTM CRS from the geometry.
     Args:
-        geometry (GEOMETRY): 
+        geometry (GEOMETRY):
             Geometry is a shapely geometry object or WKT string object.
-        in_crs (CRS): 
+        in_crs (CRS):
             Input CRS. CRS is a pyproj.CRS object or EPSG code.
-        datum_name (str): 
+        datum_name (str):
             'WGS 84', 'JGD2011' ...  default='JGD2011'
     Returns:
         pyproj.CRS: Estimated UTM CRS
     """
-    projected_geometry = reprojection_geometry(
-        geometry,
-        in_crs,
-        out_crs=4326
-    )
+    projected_geometry = reprojection_geometry(geometry, in_crs, out_crs=4326)
     bounds = projected_geometry.bounds
     lon = (bounds[0] + bounds[2]) / 2
     lat = (bounds[1] + bounds[3]) / 2
     return estimate_utm_crs(lon, lat, datum_name=datum_name)
 
 
-@crs_checker(index=0, kward='crs')
+@crs_checker(index=0, kward="crs")
 def crs_unit_name(crs: CRS) -> str:
     """
     ## Summary:
