@@ -1,18 +1,15 @@
 from typing import Optional
 
-import geopandas as gpd
 import numpy as np
-from osgeo import gdal
 import pyproj
 import shapely
+from osgeo import gdal
 
+from gdal_drawer.utils.config import CRS, XY, Bounds, CellSize, Coordinates
 from gdal_drawer.utils.geometry import (
     crs_unit_name,
     estimate_utm_crs_from_geometry,
-    reprojection_geometry
-)
-from gdal_drawer.utils.config import (
-    Bounds, CellSize, crs_checker, CRS, XY, Coordinates
+    reprojection_geometry,
 )
 
 
@@ -45,9 +42,9 @@ def get_reprojected_bounds(dst: gdal.Dataset, out_crs: CRS) -> Bounds:
     ## Summary:
         Get the reprojected bounds of the gdal.Dataset.
     Args:
-        dst (gdal.Dataset): 
+        dst (gdal.Dataset):
             gdal.Dataset
-        out_crs (pyproj.CRS): 
+        out_crs (pyproj.CRS):
             Output CRS. CRS is a pyproj.CRS object or EPSG code.
     Returns:
         Bounds(NamedTuple): (x_min, y_min, x_max, y_max)
@@ -55,9 +52,7 @@ def get_reprojected_bounds(dst: gdal.Dataset, out_crs: CRS) -> Bounds:
     bounds = get_bounds(dst)
     geometry = shapely.box(*bounds)
     reprojected_geometry = reprojection_geometry(
-        geometry=geometry,
-        in_crs=dst.GetProjection(),
-        out_crs=out_crs
+        geometry=geometry, in_crs=dst.GetProjection(), out_crs=out_crs
     )
     return Bounds(*reprojected_geometry.bounds)
 
@@ -67,18 +62,18 @@ def get_center_from_dataset(dst: gdal.Dataset, out_crs: Optional[CRS] = None) ->
     ## Summary:
         Get the center coordinates of the gdal.Dataset.
     Args:
-        dst (gdal.Dataset): 
+        dst (gdal.Dataset):
             gdal.Dataset
         out_crs (pyproj.CRS, optional):
             Output CRS. If None, the original CRS of the dataset is used.
             CRS is a pyproj.CRS object or EPSG code.
     Returns:
-        XY(NamedTuple): 
+        XY(NamedTuple):
             (x, y)
     """
     if out_crs is None:
         bounds = get_bounds(dst)
-    else:    
+    else:
         bounds = get_reprojected_bounds(dst, out_crs)
     x_center = (bounds.x_min + bounds.x_max) / 2
     y_center = (bounds.y_min + bounds.y_max) / 2
@@ -86,16 +81,15 @@ def get_center_from_dataset(dst: gdal.Dataset, out_crs: Optional[CRS] = None) ->
 
 
 def estimate_utm_crs_from_datasets(
-    dst: gdal.Dataset,
-    datum_name: str = 'JGD2011'
+    dst: gdal.Dataset, datum_name: str = "JGD2011"
 ) -> pyproj.CRS:
     """
     ## Summary:
         Estimate the UTM CRS from the gdal.Dataset.
     Args:
-        dst (gdal.Dataset): 
+        dst (gdal.Dataset):
             gdal.Dataset
-        datum_name (str): 
+        datum_name (str):
             'WGS 84', 'JGD2011' ...  default='JGD2011'\n
             https://en.wikipedia.org/wiki/Geodetic_datum
     Returns:
@@ -110,28 +104,23 @@ def estimate_utm_crs_from_datasets(
     """
     bounds = get_bounds(dst)
     return estimate_utm_crs_from_geometry(
-        geometry=shapely.box(*bounds),
-        in_crs=dst.GetProjection(),
-        datum_name=datum_name
+        geometry=shapely.box(*bounds), in_crs=dst.GetProjection(), datum_name=datum_name
     )
 
 
 def resolution_from_dataset(
-    dst: gdal.Dataset, 
-    unit: str = 'metre', 
-    digit: int = 3, 
-    datum_name: str = 'JGD2011'
+    dst: gdal.Dataset, unit: str = "metre", digit: int = 3, datum_name: str = "JGD2011"
 ) -> CellSize:
     """
     gdal.Datasetの解像度を取得する。
     Args:
-        dst (gdal.Dataset): 
+        dst (gdal.Dataset):
             gdal.Dataset
         unit (str):
             Unit of the resolution for the output.
             - 'metre'
             - 'degree'
-        digit (int): 
+        digit (int):
             Number of digits to round the resolution.
             Default is 3.
         datum_name (str):
@@ -153,31 +142,26 @@ def resolution_from_dataset(
     bounds = get_bounds(dst)
     if org_unit_name != unit:
         # Convert the resolution to the desired unit
-        if unit == 'metre':
+        if unit == "metre":
             # If the CRS is in degrees, convert to metres.
             utm_crs = estimate_utm_crs_from_geometry(
-                geometry=shapely.box(*bounds),
-                in_crs=org_crs,
-                datum_name=datum_name
+                geometry=shapely.box(*bounds), in_crs=org_crs, datum_name=datum_name
             )
             shape_bounds = reprojection_geometry(
-                geometry=shapely.box(*bounds),
-                in_crs=org_crs,
-                out_crs=utm_crs
+                geometry=shapely.box(*bounds), in_crs=org_crs, out_crs=utm_crs
             )
             bounds = Bounds(*shape_bounds.bounds)
-        elif unit == 'degree':
+        elif unit == "degree":
             # If the CRS is in metres, convert to degrees.
             wgs_84_crs = pyproj.CRS.from_epsg(4326)
             geom = reprojection_geometry(
-                geometry=shapely.box(*bounds),
-                in_crs=org_crs,
-                out_crs=wgs_84_crs
+                geometry=shapely.box(*bounds), in_crs=org_crs, out_crs=wgs_84_crs
             )
             bounds = Bounds(*geom.bounds)
         else:
-            raise ValueError(f"Invalid unit from raster dataset: {unit}"
-                             "must be 'metre' or 'degree'")
+            raise ValueError(
+                f"Invalid unit from raster dataset: {unit}must be 'metre' or 'degree'"
+            )
     # Get the resolution
     x_len = abs(bounds.x_max - bounds.x_min)
     y_len = abs(bounds.y_max - bounds.y_min)
@@ -191,7 +175,7 @@ def cells_center_coordinates(dst: gdal.Dataset) -> Coordinates:
     ## Summary:
         Get the center coordinates of each cell in the raster dataset.
     Args:
-        dst (gdal.Dataset): 
+        dst (gdal.Dataset):
             gdal.Dataset
     Returns:
         Coordinates(dataclass):
@@ -215,7 +199,7 @@ def cells_upper_left_corner_coordinates(dst: gdal.Dataset) -> Coordinates:
     ## Summary:
         Get the upper left corner coordinates of each cell in the raster dataset.
     Args:
-        dst (gdal.Dataset): 
+        dst (gdal.Dataset):
             gdal.Dataset
     Returns:
         Coordinates(dataclass):
@@ -230,14 +214,14 @@ def cells_upper_left_corner_coordinates(dst: gdal.Dataset) -> Coordinates:
     X = np.arange(bounds.x_min, bounds.x_max, x_resol)
     Y = np.arange(bounds.y_min, bounds.y_max, y_resol)
     return Coordinates(*np.meshgrid(X, Y))
-    
-    
+
+
 def cells_upper_right_corner_coordinates(dst: gdal.Dataset) -> Coordinates:
     """
     ## Summary:
         Get the upper right corner coordinates of each cell in the raster dataset.
     Args:
-        dst (gdal.Dataset): 
+        dst (gdal.Dataset):
             gdal.Dataset
     Returns:
         Coordinates(dataclass):
@@ -259,7 +243,7 @@ def cells_lower_left_corner_coordinates(dst: gdal.Dataset) -> Coordinates:
     ## Summary:
         Get the lower left corner coordinates of each cell in the raster dataset.
     Args:
-        dst (gdal.Dataset): 
+        dst (gdal.Dataset):
             gdal.Dataset
     Returns:
         Coordinates(dataclass):
@@ -281,7 +265,7 @@ def cells_lower_right_corner_coordinates(dst: gdal.Dataset) -> Coordinates:
     ## Summary:
         Get the lower right corner coordinates of each cell in the raster dataset.
     Args:
-        dst (gdal.Dataset): 
+        dst (gdal.Dataset):
             gdal.Dataset
     Returns:
         Coordinates(dataclass):
@@ -296,4 +280,3 @@ def cells_lower_right_corner_coordinates(dst: gdal.Dataset) -> Coordinates:
     X = np.arange(bounds.x_min + x_resol, bounds.x_max + x_resol, x_resol)
     Y = np.arange(bounds.y_min + y_resol, bounds.y_max + y_resol, y_resol)
     return Coordinates(*np.meshgrid(X, Y))
-
