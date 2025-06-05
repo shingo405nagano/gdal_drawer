@@ -42,10 +42,11 @@ class Coordinates:
 def crs_checker(index: int, kward: str) -> pyproj.CRS:
     """
     ## Summary:
-        Check the CRS type and convert it to pyproj.CRS if necessary.
+        CRSをチェックし、必要に応じて変換するデコレーター。CRSは整数（EPSGコード）
+        または文字列（WKTまたはPROJ文字列）として渡されることを想定しています。
     Args:
-        index (int): Index of the argument to check
-        kward (str): Keyword argument name to check
+        index (int): CRSをチェックする引数のインデックス
+        kward (str): CRSをチェックするキーワード引数の名前
     Returns:
         pyproj.CRS: CRS object
     """
@@ -65,10 +66,10 @@ def crs_checker(index: int, kward: str) -> pyproj.CRS:
             elif isinstance(crs, str):
                 try:
                     crs = pyproj.CRS.from_wkt(crs)
-                except:
+                except:  # noqa: E722
                     crs = pyproj.CRS.from_string(crs)
-            elif not isinstance(crs, pyproj.CRS):
-                raise TypeError(f"Invalid type for {kward}: {type(crs)}")
+            else:
+                crs = None
 
             if in_args:
                 args = list(args)
@@ -86,10 +87,12 @@ def crs_checker(index: int, kward: str) -> pyproj.CRS:
 def geometry_checker(index: int, kward) -> shapely.geometry.base.BaseGeometry:
     """
     ## Summary:
-        Check the geometry type and convert it to shapely.geometry if necessary.
+        Geometryをチェックし、必要に応じて変換するデコレーター。Geometryは
+        文字列（WKT形式）またはshapelyのGeometryオブジェクトとして渡されることを
+        想定しています。
     Args:
-        index (int): Index of the argument to check
-        kward (str): Keyword argument name to check
+        index (int): Geometryをチェックする引数のインデックス
+        kward (str): Geometryをチェックするキーワード引数の名前
     Returns:
         shapely.geometry.base.BaseGeometry: Geometry object
     """

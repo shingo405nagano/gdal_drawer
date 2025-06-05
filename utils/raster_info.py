@@ -16,11 +16,12 @@ from gdal_drawer.utils.geometry import (
 def get_bounds(dst: gdal.Dataset) -> Bounds:
     """
     ## Summary:
-        Get the bounds of the gdal.Dataset.
+        `gdal.Dataset`のXYの最小値と最大値を取得します。
     Args:
-        dst (gdal.Dataset): gdal.Dataset
+        dst (gdal.Dataset):
     Returns:
-        Bounds(NamedTuple): (x_min, y_min, x_max, y_max)
+        Bounds(NamedTuple):
+            (x_min, y_min, x_max, y_max)
     Examples:
         >>> dst = gdal.Open('path/to/raster.tif')
         >>> bounds: Bounds = bounds(dst)
@@ -40,12 +41,10 @@ def get_bounds(dst: gdal.Dataset) -> Bounds:
 def get_reprojected_bounds(dst: gdal.Dataset, out_crs: CRS) -> Bounds:
     """
     ## Summary:
-        Get the reprojected bounds of the gdal.Dataset.
+        `gdal.Dataset`のXYの最小値と最大値を指定されたCRSに再投影して取得します。
     Args:
         dst (gdal.Dataset):
-            gdal.Dataset
         out_crs (pyproj.CRS):
-            Output CRS. CRS is a pyproj.CRS object or EPSG code.
     Returns:
         Bounds(NamedTuple): (x_min, y_min, x_max, y_max)
     """
@@ -60,13 +59,11 @@ def get_reprojected_bounds(dst: gdal.Dataset, out_crs: CRS) -> Bounds:
 def get_center_from_dataset(dst: gdal.Dataset, out_crs: Optional[CRS] = None) -> XY:
     """
     ## Summary:
-        Get the center coordinates of the gdal.Dataset.
+        `gdal.Dataset`の中心座標を取得します。
     Args:
         dst (gdal.Dataset):
-            gdal.Dataset
         out_crs (pyproj.CRS, optional):
-            Output CRS. If None, the original CRS of the dataset is used.
-            CRS is a pyproj.CRS object or EPSG code.
+            出力CRS。Noneの場合は元のCRSで取得します。
     Returns:
         XY(NamedTuple):
             (x, y)
@@ -81,16 +78,17 @@ def get_center_from_dataset(dst: gdal.Dataset, out_crs: Optional[CRS] = None) ->
 
 
 def estimate_utm_crs_from_datasets(
-    dst: gdal.Dataset, datum_name: str = "JGD2011"
+    dst: gdal.Dataset,  #
+    datum_name: str = "JGD2011",
 ) -> pyproj.CRS:
     """
     ## Summary:
-        Estimate the UTM CRS from the gdal.Dataset.
+        `gdal.Dataset`からUTM座標系を推定します。
     Args:
         dst (gdal.Dataset):
-            gdal.Dataset
         datum_name (str):
-            'WGS 84', 'JGD2011' ...  default='JGD2011'\n
+            JGD2011, WGS84, NAD84, ETRS89, GDA94, KGD2002, TWD67, SAD69
+            ...  default='JGD2011'\n
             https://en.wikipedia.org/wiki/Geodetic_datum
     Returns:
         (pyproj.CRS): UTM CRS
@@ -109,20 +107,19 @@ def estimate_utm_crs_from_datasets(
 
 
 def resolution_from_dataset(
-    dst: gdal.Dataset, unit: str = "metre", digit: int = 3, datum_name: str = "JGD2011"
+    dst: gdal.Dataset,  #
+    unit: str = "metre",
+    digit: int = 3,
+    datum_name: str = "JGD2011",
 ) -> CellSize:
     """
     gdal.Datasetの解像度を取得する。
     Args:
         dst (gdal.Dataset):
-            gdal.Dataset
-        unit (str):
-            Unit of the resolution for the output.
+        unit (str): 出力したい解像度の単位
             - 'metre'
             - 'degree'
-        digit (int):
-            Number of digits to round the resolution.
-            Default is 3.
+        digit (int): 浮動小数点以下の桁数
         datum_name (str):
             'WGS 84', 'JGD2011' ...  default='JGD2011'\n
             https://en.wikipedia.org/wiki/Geodetic_datum
@@ -173,10 +170,9 @@ def resolution_from_dataset(
 def cells_center_coordinates(dst: gdal.Dataset) -> Coordinates:
     """
     ## Summary:
-        Get the center coordinates of each cell in the raster dataset.
+        `gdal.Dataset`の各セルの中心座標を取得します。
     Args:
         dst (gdal.Dataset):
-            gdal.Dataset
     Returns:
         Coordinates(dataclass):
             1. X (np.ndarray): shape is (RasterYSize, RasterXSize)
@@ -197,10 +193,9 @@ def cells_center_coordinates(dst: gdal.Dataset) -> Coordinates:
 def cells_upper_left_corner_coordinates(dst: gdal.Dataset) -> Coordinates:
     """
     ## Summary:
-        Get the upper left corner coordinates of each cell in the raster dataset.
+        `gdal.Dataset`の各セルの上端左隅の座標を取得します。
     Args:
         dst (gdal.Dataset):
-            gdal.Dataset
     Returns:
         Coordinates(dataclass):
             1. X (np.ndarray): shape is (RasterYSize, RasterXSize)
@@ -219,7 +214,7 @@ def cells_upper_left_corner_coordinates(dst: gdal.Dataset) -> Coordinates:
 def cells_upper_right_corner_coordinates(dst: gdal.Dataset) -> Coordinates:
     """
     ## Summary:
-        Get the upper right corner coordinates of each cell in the raster dataset.
+        `gdal.Dataset`の各セルの上端右隅の座標を取得します。
     Args:
         dst (gdal.Dataset):
             gdal.Dataset
@@ -241,10 +236,9 @@ def cells_upper_right_corner_coordinates(dst: gdal.Dataset) -> Coordinates:
 def cells_lower_left_corner_coordinates(dst: gdal.Dataset) -> Coordinates:
     """
     ## Summary:
-        Get the lower left corner coordinates of each cell in the raster dataset.
+        `gdal.Dataset`の各セルの下端左隅の座標を取得します。
     Args:
         dst (gdal.Dataset):
-            gdal.Dataset
     Returns:
         Coordinates(dataclass):
             1. X (np.ndarray): shape is (RasterYSize, RasterXSize)
@@ -263,10 +257,9 @@ def cells_lower_left_corner_coordinates(dst: gdal.Dataset) -> Coordinates:
 def cells_lower_right_corner_coordinates(dst: gdal.Dataset) -> Coordinates:
     """
     ## Summary:
-        Get the lower right corner coordinates of each cell in the raster dataset.
+        `gdal.Dataset`の各セルの下端右隅の座標を取得します。
     Args:
         dst (gdal.Dataset):
-            gdal.Dataset
     Returns:
         Coordinates(dataclass):
             1. X (np.ndarray): shape is (RasterYSize, RasterXSize)

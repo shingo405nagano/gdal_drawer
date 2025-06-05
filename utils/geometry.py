@@ -7,10 +7,10 @@ from gdal_drawer.utils.config import CRS, GEOMETRY, crs_checker, geometry_checke
 def estimate_utm_crs(lon: float, lat: float, datum_name: str = "JGD2011") -> str:
     """
     ## Summary:
-        Estimate the UTM CRS. In Japan, specify "datum_name='JGD2011'".
+        経緯度（度単位）からUTM座標系を推定する。
     Args:
-        lon (float): Longitude
-        lat (float): Latitude
+        lon (float): 経度
+        lat (float): 緯度
         datum_name(str): 'WGS 84', 'JGD2011' ...  default='JGD2011'
     Returns:
         (str): WKT-CRS
@@ -18,8 +18,8 @@ def estimate_utm_crs(lon: float, lat: float, datum_name: str = "JGD2011") -> str
     try:
         # Check if the datum_name is valid
         pyproj.CRS.from_user_input(datum_name)
-    except pyproj.exceptions.CRSError:
-        raise ValueError("Invalid datum_name. Use 'WGS 84', 'JGD2011', etc.")
+    except Exception as e:
+        raise ValueError("Invalid datum_name. Use 'WGS 84', 'JGD2011', etc.") from e
     # Estimate the UTM CRS
     aoi = pyproj.aoi.AreaOfInterest(
         west_lon_degree=lon,
@@ -37,17 +37,19 @@ def estimate_utm_crs(lon: float, lat: float, datum_name: str = "JGD2011") -> str
 @crs_checker(1, "in_crs")
 @crs_checker(2, "out_crs")
 def reprojection_geometry(
-    geometry: GEOMETRY, in_crs: CRS, out_crs: CRS
+    geometry: GEOMETRY,  #
+    in_crs: CRS,
+    out_crs: CRS,
 ) -> shapely.geometry.base.BaseGeometry:
     """
     ## Summary:
-        Reproject the geometry to the specified CRS.
+        Geometryを指定されたCRSから別のCRSに再投影します。
     Args:
-        geometry (GEOMETRY): Geometry
-        in_crs (CRS): Input CRS
-        out_crs (CRS): Output CRS
+        geometry (GEOMETRY): GeometryオブジェクトあるいはWKT文字列のGeometry
+        in_crs (CRS): 入力GeometryのCRS
+        out_crs (CRS): 出力GeometryのCRS
     Returns:
-        GEOMETRY: Reprojected geometry
+        GEOMETRY: 投影変換されたGeometryオブジェクト
     """
     if in_crs == out_crs:
         # No reprojection needed
@@ -55,7 +57,7 @@ def reprojection_geometry(
     transformer = pyproj.Transformer.from_crs(in_crs, out_crs, always_xy=True)
     try:
         geom = shapely.transform(geometry, transformer.transform, interleaved=False)
-    except:
+    except Exception:  # noqa: E722
         geom = shapely.ops.transform(transformer.transform, geometry)
     return geom
 
@@ -69,12 +71,12 @@ def estimate_utm_crs_from_geometry(
 ) -> pyproj.CRS:
     """
     ## Summary:
-        Estimate the UTM CRS from the geometry.
+        GeometryからUTM座標系を推定します。
     Args:
         geometry (GEOMETRY):
-            Geometry is a shapely geometry object or WKT string object.
+            GeometryオブジェクトあるいはWKT文字列のGeometry
         in_crs (CRS):
-            Input CRS. CRS is a pyproj.CRS object or EPSG code.
+            入力GeometryのCRS
         datum_name (str):
             'WGS 84', 'JGD2011' ...  default='JGD2011'
     Returns:
@@ -91,7 +93,7 @@ def estimate_utm_crs_from_geometry(
 def crs_unit_name(crs: CRS) -> str:
     """
     ## Summary:
-        Get the unit name of the CRS.
+        "metre"や"degree"などの単位名を返します。
     Args:
         crs (CRS): CRS
     Returns:
