@@ -1,3 +1,3 @@
-from .gdal_drawer import Array, GdalInfo
+from .gdal_drawer import Array, GdalInfo, kernels
 
-__all__ = ["GdalInfo", "Array"]
+__all__ = ["GdalInfo", "Array", "kernels"]
