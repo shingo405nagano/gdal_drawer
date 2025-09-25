@@ -5,6 +5,8 @@ from typing import Any, Optional
 import pyproj
 import shapely
 
+from .data import XY, Bounds
+
 
 class GdalInfo(object):
     """
@@ -90,17 +92,20 @@ class GdalInfo(object):
         return self.geo_transform[-1]
 
     @property
-    def geo_scope(self) -> dict[str, float]:
+    def geo_scope(self) -> Bounds:
         """
         ## Summary:
             画像の範囲を辞書形式で返す。
+        Returns:
+            Bounds:
+                x_min, y_min, x_max, y_maxの順で格納されたNamedTuple
         """
         transform = self.geo_transform
         x_min = transform[0]
         y_max = transform[3]
         x_max = x_min + self.x_resolution * self.x_size  # type: ignore
         y_min = y_max + self.y_resolution * self.y_size  # type: ignore
-        return {"x_min": x_min, "y_min": y_min, "x_max": x_max, "y_max": y_max}
+        return Bounds(x_min, y_min, x_max, y_max)
 
     def geo_scope_geometry(self, wgs84: bool = False) -> shapely.Polygon:
         """
@@ -118,44 +123,59 @@ class GdalInfo(object):
         return shapely.Polygon(poly_cds)
 
     @property
-    def upper_left_corner(self) -> tuple[float]:
+    def upper_left_corner(self) -> XY:
         """
         ## Summary:
             画像の左上隅の座標を返す。
+        Returns:
+            XY:
+                x, yの順で格納されたNamedTuple
         """
-        return self._info.get("cornerCoordinates").get("upperLeft")
+        return XY(*self._info.get("cornerCoordinates").get("upperLeft"))
 
     @property
-    def lower_left_corner(self) -> tuple[float]:
+    def lower_left_corner(self) -> XY:
         """
         ## Summary:
             画像の左下隅の座標を返す。
+        Returns:
+            XY:
+                x, yの順で格納されたNamedTuple
         """
-        return self._info.get("cornerCoordinates").get("lowerLeft")
+        return XY(*self._info.get("cornerCoordinates").get("lowerLeft"))
 
     @property
-    def lower_right_corner(self) -> tuple[float]:
+    def lower_right_corner(self) -> XY:
         """
         ## Summary:
             画像の右下隅の座標を返す。
+        Returns:
+            XY:
+                x, yの順で格納されたNamedTuple
         """
-        return self._info.get("cornerCoordinates").get("lowerRight")
+        return XY(*self._info.get("cornerCoordinates").get("lowerRight"))
 
     @property
-    def upper_right_corner(self) -> tuple[float]:
+    def upper_right_corner(self) -> XY:
         """
         ## Summary:
             画像の右上隅の座標を返す。
+        Returns:
+            XY:
+                x, yの順で格納されたNamedTuple
         """
-        return self._info.get("cornerCoordinates").get("upperRight")
+        return XY(*self._info.get("cornerCoordinates").get("upperRight"))
 
     @property
-    def center(self) -> tuple[float]:
+    def center(self) -> XY:
         """
         ## Summary:
             画像の中心座標を返す。
+        Returns:
+            XY:
+                x, yの順で格納されたNamedTuple
         """
-        return self._info.get("cornerCoordinates").get("center")
+        return XY(*self._info.get("cornerCoordinates").get("center"))
 
     @property
     def bands(self) -> list[dict[str, Any]]:
