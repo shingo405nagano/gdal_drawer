@@ -89,5 +89,8 @@ class Array:
         """
         ary = self.array(band).copy()
         mask = self.nodata_mask(band)
-        ary[mask] = overwrite_value
-        return ary
+        if np.sum(mask) == 0:
+            return ary
+        else:
+            ary[mask] = overwrite_value
+            return ary
